@@ -33,3 +33,16 @@ data/holders_key.json
 *.log
 agents/*/data/
 _experiments/data/
+
+# Source trees that must remain synchronized with the repository
+!.gitignore
+!_demo_2v2/
+!_demo_2v2/*.py
+!_experiments/
+!_experiments/*.py
+!_experiments/security_reproduction/
+!_experiments/security_reproduction/*.py
+!_experiments/security_reproduction/README.md
+!_experiments/security_reproduction/reproduction_results.md
+!_ops_services/
+!_ops_services/*.py
