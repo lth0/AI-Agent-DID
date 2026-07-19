@@ -1,0 +1,35 @@
+key.json
+config/key.json
+config/agents_4_key.json
+config/*_key.json
+!config/key_example.json
+!config/agents_4_key_example.json
+
+# Environment files and local secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.secret
+*secret*
+*token*
+
+# Local runtime and experiment artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+node_modules/
+README_AI.txt
+image/
+agents_4_key.json
+data/verifiers_key.json
+data/holders_key.json
+.codex/
+*.log
+agents/*/data/
+_experiments/data/

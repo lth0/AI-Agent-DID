@@ -1,0 +1,38 @@
+{
+  "holders": [
+    {
+      "name": "Holder-A",
+      "port": 5000,
+      "role": "agent_a_op",
+      "security": {
+        "attack_mode": "none",
+        "allow_unsafe_reset": false
+      }
+    },
+    {
+      "name": "Holder-B",
+      "port": 5001,
+      "role": "agent_b_op",
+      "security": {
+        "attack_mode": "none",
+        "allow_unsafe_reset": false
+      }
+    }
+  ],
+  "verifiers": [
+    {
+      "name": "Verifier-C",
+      "port": 5002,
+      "role": "agent_c_op",
+      "target_url": "http://localhost:5000",
+      "strict_security": true
+    },
+    {
+      "name": "Verifier-D",
+      "port": 5003,
+      "role": "agent_d_op",
+      "target_url": "http://localhost:5001",
+      "strict_security": true
+    }
+  ]
+}

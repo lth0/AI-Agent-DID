@@ -1,0 +1,26 @@
+{
+  "@context": [
+    "https://www.w3.org/ns/credentials/v2",
+    "https://schema.org"
+  ],
+  "type": ["VerifiableCredential", "AgentCapabilityCredential"],
+  "name": "Agent Capability Assessment",
+  "description": "Issuer attestation for the deterministic integer-addition-v1 capability benchmark.",
+  "credentialSubject": {
+    "id": "will_be_replaced_by_code",
+    "benchmarkId": "integer-addition-v1",
+    "capability": "urn:benchmark:integer-addition-v1",
+    "claimedScore": 1.0,
+    "threshold": 0.8,
+    "qualified": true,
+    "artifactDigest": "sha256:705dc7e32b72c7c0c400d633ed457edea115aed19c826a5ede47e357a4433e92",
+    "datasetHash": "sha256:2ff3f950ad0d15c8a02664853e848b6f19b27b5702a21e74d0b83687c0cb2e36",
+    "evaluation": {
+      "@type": "Rating",
+      "ratingSystem": "integer-addition-v1",
+      "ratingValue": "1.000",
+      "bestRating": "1.000",
+      "datasetHash": "sha256:2ff3f950ad0d15c8a02664853e848b6f19b27b5702a21e74d0b83687c0cb2e36"
+    }
+  }
+}
