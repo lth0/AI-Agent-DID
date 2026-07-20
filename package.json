@@ -4,7 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "compile:lineage": "hardhat compile",
+    "export:lineage-abi": "hardhat run contracts/scripts/export-abi.js",
+    "test": "hardhat test",
+    "test:lineage": "hardhat test contracts/test/AgentLineageRegistry.test.js",
+    "benchmark:lineage": "hardhat run contracts/scripts/benchmark.js",
+    "deploy:lineage:sepolia": "hardhat run contracts/scripts/deploy.js --network sepolia"
   },
   "keywords": [],
   "author": "",
@@ -12,7 +17,12 @@
   "type": "commonjs",
   "dependencies": {
     "did-resolver": "^4.1.0",
-    "ethers": "^5.7.2",
     "ethr-did-resolver": "^11.0.5"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^3.1.2",
+    "chai": "^4.5.0",
+    "ethers": "^6.17.0",
+    "hardhat": "^2.22.17"
   }
 }

@@ -1,19 +1,76 @@
-# AgentDID 安全复现实验结果
+# AgentDID / AgentLineage 安全实验结果
 
-实验分支：`security`  
-真实 LLM：`gpt-5.4-mini`  
-真实网络实验：`vp_replay-f7c2b9f3-7ab8-4d42-8e4c-d40fa982fad9`
+当前结论以 `develop` 分支上的 AgentLineage-DID MVP 为准。最新攻击矩阵包含 1 个合法请求和 14 个攻击请求，共 15 个确定性测试场景。
 
-## 结果总表
+最新证据：
 
-| 场景 | 复现情况 | 严格验证结果 | 日志/测试依据 |
-|---|---|---|---|
-| 智能体冒充 | 已完成离线复现 | 声明 DID 与实际签名 DID 不一致，应拒绝 | `test_impersonation_claim_is_signed_by_attacker` |
-| VP 重放 | 已完成真实网络复现 | 第一轮通过；第二轮旧 nonce 被拒绝 | `holder_49872.jsonl`、`demo_Server-agent_c_op.jsonl` |
-| 凭证重放 | 已完成离线复现 | 同一 VC 出现两次，严格验证器应拒绝 | `test_duplicate_vc_and_false_capability_profiles` |
-| 虚假能力声明 | 已完成离线复现 | 评分改为 `1.000` 后原签名失效，应拒绝 | `test_duplicate_vc_and_false_capability_profiles` |
-| 虚假当前状态 | 已完成离线复现 | 第二次仍返回旧上下文哈希 | `test_false_state_replays_initial_hash` |
-| 上下文丢失或重置 | 脚本已实现，尚未独立运行网络实验 | 预期本地/远端上下文哈希不一致 | `reset_context.py` |
+- 攻击矩阵：`.codex/lineage_runs/attack_matrix_20260719T153105Z/report.json`
+- 离线性能：`.codex/lineage_runs/offline_benchmark_20260719T151505Z.json`
+- Hardhat 预算基准：`.codex/lineage_runs/hardhat_budget_20260719T151220114Z.json`
+- Sepolia 冒烟：`.codex/lineage_runs/sepolia_smoke_20260719T145424Z.json`
+
+## 当前 AgentLineage 结果
+
+### 安全矩阵
+
+指标定义：`HAR` 是合法请求接受率，`PESR` 是攻击请求错误接受率。理想结果为 `HAR=1.0`、`PESR=0.0`。
+
+| 方案 | 合法请求 | 攻击请求错误接受 | HAR | PESR |
+|---|---:|---:|---:|---:|
+| Shared-Root | 1/1 | 14/14 | 1.0000 | 1.0000 |
+| Original-AgentDID | 1/1 | 13/14 | 1.0000 | 0.9286 |
+| Plain-Delegation | 1/1 | 11/14 | 1.0000 | 0.7857 |
+| OpenFGA-Overlay | 1/1 | 10/14 | 1.0000 | 0.7143 |
+| Independent-DID+ACL | 1/1 | 9/14 | 1.0000 | 0.6429 |
+| Lineage-no-budget | 1/1 | 0/14 | 1.0000 | 0.0000 |
+| Full Lineage | 1/1 | 0/14 | 1.0000 | 0.0000 |
+
+Full Lineage 和 Lineage-no-budget 均拒绝全部攻击，说明主要安全收益来自完整谱系、权限收缩、请求绑定和撤销验证。Full Lineage 进一步增加了预算、重放和并发租约的链上强制执行。
+
+### 攻击场景拒绝结果
+
+| 攻击场景 | 结果码 |
+|---|---|
+| `leaf_action_escalation` | `PERMISSION_DENIED` |
+| `leaf_resource_escalation` | `PERMISSION_DENIED` |
+| `delegation_scope_escalation` | `ERROR_VALUEERROR` |
+| `validity_extension` | `IDENTITY_POLICY_INVALID` |
+| `depth_reset` | `POLICY_ESCALATION` |
+| `forbidden_session_delegation` | `IDENTITY_POLICY_INVALID` |
+| `operation_key_signed_delegation` | `DELEGATION_SIGNATURE_INVALID` |
+| `sibling_impersonation` | `REQUEST_SIGNATURE_INVALID` |
+| `branch_splice` | `ROOT_OR_EPOCH_MISMATCH` |
+| `cross_task_replay` | `PERMISSION_DENIED` |
+| `cross_audience_replay` | `AUDIENCE_MISMATCH` |
+| `ancestor_revocation` | `STATUS_REVOKED` |
+| `confused_deputy` | `ORIGIN_MISMATCH` |
+| `version_substitution` | `VERSION_MISMATCH` |
+
+`delegation_scope_escalation` 最终被拒绝，但返回 `ERROR_VALUEERROR`，原因是攻击动作没有注册工具路由，网关在权限验证前执行了路由解析。这不影响当前拒绝率，但不满足稳定错误码要求，后续应为该攻击注册测试工具路由，使其返回 `POLICY_ESCALATION`。
+
+### 预算和链上结果
+
+Hardhat 预算基准中，调用上限为 `2000`，最终消费 `1111`，活动并发为 `0`，预算超额率 `QOR=0`。1000 个调用档位的本地开始调用吞吐约 `989 TPS`，平均 Gas 约 `161235`。该 TPS 是本地 Hardhat 环境结果，不代表 Sepolia 生产吞吐。
+
+Sepolia 两级委托冒烟结果如下：
+
+| 场景 | 结果 |
+|---|---|
+| 合法请求 1 | `ACCEPTED` |
+| 超出权限范围 | `PERMISSION_DENIED` |
+| 合法请求 2 | `ACCEPTED` |
+| 预算耗尽 | `BUDGET_REJECTED` |
+| 祖先撤销后调用 | `STATUS_REVOKED` |
+
+叶预算最终为 `2/2` 次调用，活动并发为 `0`，未释放预算为 `0`。
+
+### 离线性能
+
+委托深度从 1 增加到 8 时，验证 P95 从 `14.27 ms` 增加到 `48.62 ms`，证明大小从 `3034 bytes` 增加到 `14276 bytes`。深度 16 被协议上限直接拒绝。扇出 1 到 1000 时签发吞吐约为 `31 TPS`，1000 并发验证全部成功，吞吐约为 `20.9 TPS`。
+
+## 历史 AgentDID 2v2 基线
+
+以下章节保留旧版 2v2 安全复现实验，不能与上面的 1+14 AgentLineage 矩阵直接合并比较。旧版 JSONL 聚合包含 108 条记录：Holder 身份响应 `22/22` 成功，Probe 响应 `18/18` 成功，Context 响应 `14/14` 成功；严格验证器分别接受 VP `18/22`、Probe `14/18`、Context `11/14`。
 
 ## 1. 智能体冒充
 

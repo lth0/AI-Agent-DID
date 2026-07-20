@@ -314,9 +314,10 @@ def create_presentation(
 def create_state(
     spec: CaseSpec, holder: Actor, audience: str, nonce: str
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    # Readiness is liveness; the evaluator separately determines semantic correctness.
     actual = {
         "artifactDigest": artifact_digest(spec.artifact_profile),
-        "ready": spec.artifact_profile == "correct",
+        "ready": True,
         "stateVersion": 3,
     }
     reported = copy.deepcopy(actual)

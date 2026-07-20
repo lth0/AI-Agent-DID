@@ -1,0 +1,29 @@
+{
+  "enabled": false,
+  "chain_id": 11155111,
+  "rpc_url": "https://your-sepolia-rpc.example",
+  "registry_address": "0x0000000000000000000000000000000000000000",
+  "confirmations": 1,
+  "transaction_timeout_seconds": 600,
+  "priority_fee_gwei": "0.1",
+  "max_request_age_seconds": 120,
+  "max_state_block_lag": 2,
+  "gateway_audience": "urn:agentlineage:gateway:local",
+  "policy_version": "agentlineage-policy-v1",
+  "epoch_ttl_seconds": 2592000,
+  "root_budget": {
+    "calls": 10000,
+    "cost_units": 100000,
+    "concurrency": 1000
+  },
+  "root_permission": {
+    "actions": ["echo", "hash"],
+    "resources": ["urn:agentlineage:tool:echo", "urn:agentlineage:tool:sha256"],
+    "tasks": ["*"],
+    "audiences": ["urn:agentlineage:gateway:local"],
+    "versions": ["*"],
+    "ttl_seconds": 2592000,
+    "remaining_depth": 8,
+    "delegable": true
+  }
+}

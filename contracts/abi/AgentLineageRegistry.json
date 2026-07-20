@@ -1,0 +1,1112 @@
+{
+  "contractName": "AgentLineageRegistry",
+  "abi": [
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "parentBudgetId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "calls",
+          "type": "uint64"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "cost",
+          "type": "uint64"
+        }
+      ],
+      "name": "BudgetCreated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "credentialId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "parentCredentialId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "childId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "DelegationRegistered",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "uint64",
+          "name": "epoch",
+          "type": "uint64"
+        },
+        {
+          "indexed": false,
+          "internalType": "address",
+          "name": "delegationKey",
+          "type": "address"
+        }
+      ],
+      "name": "EpochRotated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "requestHash",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "InvocationFinished",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "requestHash",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "internalType": "bytes32",
+          "name": "credentialId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "InvocationStarted",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "groupId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "internalType": "bytes32",
+          "name": "parentBudgetId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "ReplicaGroupCreated",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "address",
+          "name": "governance",
+          "type": "address"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint64",
+          "name": "epoch",
+          "type": "uint64"
+        }
+      ],
+      "name": "RootRegistered",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "indexed": true,
+          "internalType": "bytes32",
+          "name": "subject",
+          "type": "bytes32"
+        },
+        {
+          "indexed": false,
+          "internalType": "uint8",
+          "name": "kind",
+          "type": "uint8"
+        }
+      ],
+      "name": "StatusRevoked",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "credentialId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "requestHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "costUnits",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "leaseSeconds",
+          "type": "uint32"
+        },
+        {
+          "internalType": "bytes",
+          "name": "authorization",
+          "type": "bytes"
+        }
+      ],
+      "name": "beginInvocation",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "budgetReplicaGroups",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "budgets",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "ownerCredentialId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "parentBudgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "limitCalls",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "limitCost",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "limitConcurrency",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "spentCalls",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "spentCost",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "activeConcurrency",
+          "type": "uint32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "reservedCalls",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "reservedCost",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "reservedConcurrency",
+          "type": "uint32"
+        },
+        {
+          "internalType": "bool",
+          "name": "exists",
+          "type": "bool"
+        },
+        {
+          "internalType": "bool",
+          "name": "closed",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes",
+          "name": "authorization",
+          "type": "bytes"
+        }
+      ],
+      "name": "closeBudget",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "groupId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes",
+          "name": "authorization",
+          "type": "bytes"
+        }
+      ],
+      "name": "closeReplicaGroupBudget",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "parentBudgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "groupId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "groupBudgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "calls",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "cost",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "concurrency",
+          "type": "uint32"
+        },
+        {
+          "internalType": "bytes",
+          "name": "authorization",
+          "type": "bytes"
+        }
+      ],
+      "name": "createReplicaGroupBudget",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "calls",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "cost",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "concurrency",
+          "type": "uint32"
+        }
+      ],
+      "name": "createRootBudget",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "delegations",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "parentCredentialId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "credentialHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "parentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "childId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "edgeId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "lineageCommitment",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "policyHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "replicaGroupId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "address",
+          "name": "operationKey",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "delegationKey",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "epoch",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "expiresAt",
+          "type": "uint64"
+        },
+        {
+          "internalType": "bool",
+          "name": "exists",
+          "type": "bool"
+        },
+        {
+          "internalType": "bool",
+          "name": "revoked",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "domainSeparator",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "requestHash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "finishInvocation",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "epoch",
+          "type": "uint64"
+        },
+        {
+          "internalType": "bytes32[]",
+          "name": "credentialIds",
+          "type": "bytes32[]"
+        },
+        {
+          "internalType": "bytes32[]",
+          "name": "edgeIds",
+          "type": "bytes32[]"
+        },
+        {
+          "internalType": "bytes32[]",
+          "name": "nodeIds",
+          "type": "bytes32[]"
+        }
+      ],
+      "name": "getValidationState",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "active",
+          "type": "bool"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "reason",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint256",
+          "name": "checkedBlock",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "invocations",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "credentialId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "address",
+          "name": "executor",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "expiresAt",
+          "type": "uint64"
+        },
+        {
+          "internalType": "bool",
+          "name": "active",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "requestHash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "reapExpiredInvocation",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "credentialId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "parentCredentialId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "credentialHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "parentCredentialHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "parentId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "childId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "edgeId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "lineageCommitment",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "policyHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "replicaGroupId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "address",
+          "name": "operationKey",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "delegationKey",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "expiresAt",
+          "type": "uint64"
+        },
+        {
+          "internalType": "bytes",
+          "name": "authorization",
+          "type": "bytes"
+        }
+      ],
+      "name": "registerDelegation",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "epoch",
+          "type": "uint64"
+        },
+        {
+          "internalType": "address",
+          "name": "delegationKey",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "epochCertificateHash",
+          "type": "bytes32"
+        }
+      ],
+      "name": "registerRoot",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "replicaGroups",
+      "outputs": [
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "parentBudgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "budgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bool",
+          "name": "exists",
+          "type": "bool"
+        },
+        {
+          "internalType": "bool",
+          "name": "closed",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "parentBudgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "childBudgetId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "ownerCredentialId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "calls",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint64",
+          "name": "cost",
+          "type": "uint64"
+        },
+        {
+          "internalType": "uint32",
+          "name": "concurrency",
+          "type": "uint32"
+        },
+        {
+          "internalType": "bytes",
+          "name": "authorization",
+          "type": "bytes"
+        }
+      ],
+      "name": "reserveChildBudget",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "credentialId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "revokeCredential",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "edgeId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "revokeEdge",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "epoch",
+          "type": "uint64"
+        }
+      ],
+      "name": "revokeEpoch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "nodeId",
+          "type": "bytes32"
+        }
+      ],
+      "name": "revokeNode",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "revokedEdges",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "",
+          "type": "uint64"
+        }
+      ],
+      "name": "revokedEpochs",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "revokedNodes",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "roots",
+      "outputs": [
+        {
+          "internalType": "address",
+          "name": "governance",
+          "type": "address"
+        },
+        {
+          "internalType": "uint64",
+          "name": "currentEpoch",
+          "type": "uint64"
+        },
+        {
+          "internalType": "address",
+          "name": "delegationKey",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "epochCertificateHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bool",
+          "name": "active",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "rootId",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "uint64",
+          "name": "newEpoch",
+          "type": "uint64"
+        },
+        {
+          "internalType": "address",
+          "name": "delegationKey",
+          "type": "address"
+        },
+        {
+          "internalType": "bytes32",
+          "name": "epochCertificateHash",
+          "type": "bytes32"
+        },
+        {
+          "internalType": "bool",
+          "name": "revokePrevious",
+          "type": "bool"
+        }
+      ],
+      "name": "rotateEpoch",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        {
+          "internalType": "bytes32",
+          "name": "",
+          "type": "bytes32"
+        }
+      ],
+      "name": "usedRequestHashes",
+      "outputs": [
+        {
+          "internalType": "bool",
+          "name": "",
+          "type": "bool"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ]
+}

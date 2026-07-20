@@ -11,6 +11,76 @@ This is a Proof of Concept (PoC) for an Agent decentralized identity authenticat
 
 The project explores the autonomous interaction capabilities of AI Agents within a Decentralized Identity (DID) network, focusing on the end-to-end authentication flow between Holder Agents and Verifier Agents.
 
+## Optional AgentLineage-DID MVP
+
+The `develop` branch includes an optional privilege-conserving delegation layer. It is disabled by default and does not change the original `/auth`, `/probe`, or `/context_hash` flows.
+
+Key properties:
+
+* Tree-only delegation with independent operation and delegation keys.
+* `secp256k1`, HKDF-SHA256 domain separation, and EIP-712 signatures.
+* Exact-match permission attenuation with a maximum depth of 8.
+* On-chain calls, cost, concurrency, replay, lease, and revocation enforcement.
+* Keyless ReplicaGroup budgets shared by independently keyed Instance agents.
+* Fail-closed latest-state verification at the resource gateway.
+
+The final Sepolia registry is [`0xD08c036042dC2B71dCD59be3E8A58689fb346198`](https://sepolia.etherscan.io/address/0xD08c036042dC2B71dCD59be3E8A58689fb346198). Runtime configuration and all experiment outputs remain ignored by Git.
+
+### AgentLineage Setup
+
+```powershell
+conda create -n did python=3.11 -y
+conda run -n did python -m pip install -r requirements.txt
+npm.cmd install
+conda run -n did python _ops_services\configure_lineage.py `
+  --registry-address 0xD08c036042dC2B71dCD59be3E8A58689fb346198
+```
+
+Set secrets only in the current process or a secret manager. Do not put them in repository files:
+
+```powershell
+$env:AGENTLINEAGE_ROOT_IDENTITY_KEY = "0x..."
+$env:AGENTLINEAGE_ROOT_SEED = "<at-least-64-hex-characters>"
+$env:AGENTLINEAGE_RELAYER_KEY = "0x..."
+$env:AGENTLINEAGE_KEYSTORE_PASSWORD = "..."
+$env:AGENTLINEAGE_CONTROL_TOKEN = "..."
+```
+
+For a new registry, initialize epoch 1 and its root budget. For an already registered root, rotate to a fresh epoch instead:
+
+```powershell
+conda run -n did python _ops_services\setup_lineage_root.py
+conda run -n did python _ops_services\setup_lineage_root.py --rotate
+```
+
+Enable and run the policy enforcement gateway:
+
+```powershell
+$env:AGENTLINEAGE_ENABLED = "true"
+conda run -n did python _ops_services\lineage_server.py --port 8100
+```
+
+Create a child identity as an encrypted keystore under `.codex/lineage/keys/`:
+
+```powershell
+conda run -n did python _ops_services\create_lineage_identity.py `
+  --type session --challenge-url http://127.0.0.1:8100
+```
+
+The API exposes `POST /v1/lineage/challenge`, `/spawn`, `/invoke`, `/revoke`, and `GET /v1/lineage/status/<id>`. Spawn and revoke require `X-AgentLineage-Control-Token`. See [`docs/AGENTLINEAGE.md`](docs/AGENTLINEAGE.md) for request flow and invariants.
+
+### AgentLineage Verification
+
+```powershell
+conda run -n did python -m unittest discover -s _experiments\lineage -p "test_*.py" -v
+npm.cmd run test:lineage
+conda run -n did python -m _experiments.lineage.run_attack_matrix
+conda run -n did python -m _experiments.lineage.run_benchmark --iterations 10
+npm.cmd run benchmark:lineage
+```
+
+Generated evidence is written only to `.codex/lineage_runs/` and `.codex/lineage/audit/`.
+
 ### Core Workflow
 1.  **Step 1 (Registration)**: Register a DID and authorize a Delegate (operated by the Agent's actual controller).
 2.  **Step 2 (Self-Application)**: Upon startup, the Agent autonomously applies for a VC (Verifiable Credential) from the Issuer.
