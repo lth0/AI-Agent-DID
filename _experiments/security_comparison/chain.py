@@ -15,6 +15,7 @@ from eth_account import Account
 from web3 import Web3
 from web3.logs import DISCARD
 
+from _experiments.security_comparison.cli_common import redact_rpc_text
 from infrastructure.agentdid_protocol import (
     ProtocolIdentity,
     did_network,
@@ -35,6 +36,20 @@ DEFAULT_SEPOLIA_LINEAGE_REGISTRY = "0xD08c036042dC2B71dCD59be3E8A58689fb346198"
 # Minimal ERC-1056 ABI used by the comparison runner. Keeping this local avoids
 # depending on a test artifact inside node_modules for transaction creation.
 DID_REGISTRY_ABI = [
+    {
+        "inputs": [{"internalType": "address", "name": "identity", "type": "address"}],
+        "name": "identityOwner",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "identity", "type": "address"}],
+        "name": "changed",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
     {
         "inputs": [
             {"internalType": "address", "name": "identity", "type": "address"},
@@ -297,18 +312,30 @@ def local_config(deployment: dict[str, Any]) -> ChainConfig:
     )
 
 
-def _tx_params(w3: Web3, address: str, nonce: int) -> dict[str, Any]:
+def _tx_params(
+    w3: Web3,
+    address: str,
+    nonce: int,
+    *,
+    max_fee_per_gas_wei: int | None = None,
+) -> dict[str, Any]:
     params: dict[str, Any] = {"from": address, "nonce": nonce, "chainId": w3.eth.chain_id}
     latest = w3.eth.get_block("latest")
     base_fee = latest.get("baseFeePerGas")
     if base_fee is None:
-        params["gasPrice"] = int(w3.eth.gas_price * 1.2)
+        gas_price = int(w3.eth.gas_price * 1.2)
+        if max_fee_per_gas_wei is not None and gas_price > max_fee_per_gas_wei:
+            raise RuntimeError("TRANSACTION_FEE_CAP_EXCEEDED")
+        params["gasPrice"] = gas_price
     else:
         priority = max(int(w3.eth.max_priority_fee), int(Web3.to_wei("0.1", "gwei")))
+        max_fee = int(base_fee) * 2 + priority
+        if max_fee_per_gas_wei is not None and max_fee > max_fee_per_gas_wei:
+            raise RuntimeError("TRANSACTION_FEE_CAP_EXCEEDED")
         params.update({
             "type": 2,
             "maxPriorityFeePerGas": priority,
-            "maxFeePerGas": int(base_fee) * 2 + priority,
+            "maxFeePerGas": max_fee,
         })
     return params
 
@@ -341,12 +368,21 @@ def _send_function(
     private_key: str,
     *,
     confirmations: int = 1,
+    max_fee_per_gas_wei: int | None = None,
+    gas_limit_cap: int | None = None,
 ) -> tuple[dict[str, Any], Any]:
     account = Account.from_key(private_key)
-    params = _tx_params(w3, account.address, w3.eth.get_transaction_count(account.address, "pending"))
+    params = _tx_params(
+        w3,
+        account.address,
+        w3.eth.get_transaction_count(account.address, "pending"),
+        max_fee_per_gas_wei=max_fee_per_gas_wei,
+    )
     transaction = function.build_transaction(params)
     if "gas" not in transaction:
         transaction["gas"] = int(w3.eth.estimate_gas(transaction) * 1.2)
+    if gas_limit_cap is not None and int(transaction["gas"]) > gas_limit_cap:
+        raise RuntimeError("TRANSACTION_GAS_LIMIT_CAP_EXCEEDED")
     signed = w3.eth.account.sign_transaction(transaction, private_key)
     tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=600)
@@ -365,9 +401,11 @@ def receipt_dict(receipt: Any) -> dict[str, Any]:
     return {
         "transaction_hash": receipt.transactionHash.hex(),
         "block_number": int(receipt.blockNumber),
+        "block_hash": receipt.blockHash.hex(),
         "transaction_index": int(receipt.transactionIndex),
         "status": int(receipt.status),
         "gas_used": int(receipt.gasUsed),
+        "effective_gas_price": int(receipt.get("effectiveGasPrice") or 0),
         "contract_address": receipt.contractAddress,
         "log_count": len(receipt.logs),
     }
@@ -377,6 +415,10 @@ def configure_did_registry(
     config: ChainConfig,
     identities: dict[str, ProtocolIdentity],
     actor_keys: ActorKeys,
+    *,
+    max_fee_per_gas_wei: int | None = None,
+    gas_limit_cap: int | None = None,
+    allowed_setup_roles: set[str] | None = None,
 ) -> dict[str, Any]:
     w3 = Web3(Web3.HTTPProvider(
         config.rpc_url,
@@ -414,6 +456,8 @@ def configure_did_registry(
                 "resolution_source": existing["source"],
             })
             continue
+        if allowed_setup_roles is not None and role not in allowed_setup_roles:
+            raise RuntimeError(f"DID_SETUP_PLAN_CHANGED:{role}")
         function = contract.functions.setAttribute(
             identity.controller_address,
             key_name,
@@ -425,6 +469,8 @@ def configure_did_registry(
             function,
             actor_keys.controllers[role],
             confirmations=config.confirmations,
+            max_fee_per_gas_wei=max_fee_per_gas_wei,
+            gas_limit_cap=gas_limit_cap,
         )
         decoded = contract.events.DIDAttributeChanged().process_receipt(
             raw_receipt,
@@ -487,26 +533,28 @@ def resolve_did_document(config: ChainConfig, did: str) -> dict[str, Any]:
     if not executable:
         raise FileNotFoundError("node is required for did:ethr resolution")
     helper = PROJECT_ROOT / "infrastructure" / "real_resolve.js"
+    resolver_environment = os.environ.copy()
+    resolver_environment["AGENTDID_RESOLVER_RPC_URL"] = config.rpc_url
     completed = subprocess.run(
         [
             executable,
             str(helper),
             did,
-            config.rpc_url,
             did_network(config.chain_id),
             str(config.chain_id),
             config.did_registry_address,
         ],
         cwd=PROJECT_ROOT,
+        env=resolver_environment,
         capture_output=True,
         text=True,
         encoding="utf-8",
         timeout=60,
     )
     if completed.returncode != 0:
-        diagnostic = "\n".join(
+        diagnostic = redact_rpc_text("\n".join(
             part for part in (completed.stderr, completed.stdout) if part
-        ).replace(config.rpc_url, "<redacted-rpc>").strip()
+        ), config.rpc_url).strip()
         raise RuntimeError(
             "did:ethr resolution failed "
             f"(exit={completed.returncode}): {diagnostic[-1000:]}"
@@ -585,9 +633,23 @@ def resolve_and_verify_dids(
 
 
 def anchor_evidence(config: ChainConfig, private_key: str, evidence_hash: str) -> dict[str, Any]:
-    anchor = EthereumEvidenceAnchor(config.rpc_url, private_key)
+    anchor = EthereumEvidenceAnchor(
+        config.rpc_url,
+        private_key,
+        request_timeout_seconds=config.rpc_timeout_seconds,
+        receipt_timeout_seconds=max(600.0, config.rpc_timeout_seconds * 10),
+    )
     result = anchor.submit(evidence_hash, wait=True)
+    receipt = anchor.w3.eth.get_transaction_receipt(result["tx_hash"])
+    confirmation_block = _wait_for_confirmations(
+        anchor.w3,
+        receipt,
+        config.confirmations,
+        timeout=max(600.0, config.rpc_timeout_seconds * 10),
+    )
     result["verification"] = anchor.verify_transaction(result["tx_hash"], evidence_hash)
+    result["confirmations_required"] = config.confirmations
+    result["confirmation_block_number"] = confirmation_block
     result["backend"] = config.backend
     return result
 
@@ -595,7 +657,10 @@ def anchor_evidence(config: ChainConfig, private_key: str, evidence_hash: str) -
 def decode_lineage_events(config: ChainConfig, transaction_hashes: list[str]) -> list[dict[str, Any]]:
     if not transaction_hashes:
         return []
-    w3 = Web3(Web3.HTTPProvider(config.rpc_url))
+    w3 = Web3(Web3.HTTPProvider(
+        config.rpc_url,
+        request_kwargs={"timeout": config.rpc_timeout_seconds},
+    ))
     contract = w3.eth.contract(address=config.lineage_registry_address, abi=load_registry_abi())
     event_names = [item["name"] for item in load_registry_abi() if item.get("type") == "event"]
     decoded: list[dict[str, Any]] = []
@@ -624,7 +689,10 @@ def decode_lineage_events(config: ChainConfig, transaction_hashes: list[str]) ->
 
 
 def query_root_state(config: ChainConfig, root_did: str) -> dict[str, Any]:
-    w3 = Web3(Web3.HTTPProvider(config.rpc_url))
+    w3 = Web3(Web3.HTTPProvider(
+        config.rpc_url,
+        request_kwargs={"timeout": config.rpc_timeout_seconds},
+    ))
     contract = w3.eth.contract(address=config.lineage_registry_address, abi=load_registry_abi())
     governance, epoch, delegation_key, certificate_hash, active = contract.functions.roots(
         bytes32_id(root_did)

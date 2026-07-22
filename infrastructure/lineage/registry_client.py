@@ -56,7 +56,9 @@ def load_registry_abi() -> list[dict[str, Any]]:
 
 
 class RegistryTransactionError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, transaction_hash: str | None = None):
+        super().__init__(message)
+        self.transaction_hash = transaction_hash
 
 
 class LineageRegistryClient:
@@ -69,6 +71,8 @@ class LineageRegistryClient:
         confirmations: int = 1,
         receipt_timeout_seconds: int = 600,
         priority_fee_gwei: str = "0.1",
+        max_fee_per_gas_wei: int | None = None,
+        gas_limit_cap: int | None = None,
     ):
         if not w3.is_connected():
             raise ConnectionError("lineage registry RPC is not connected")
@@ -79,6 +83,26 @@ class LineageRegistryClient:
         self.confirmations = max(1, int(confirmations))
         self.receipt_timeout_seconds = max(30, int(receipt_timeout_seconds))
         self.priority_fee_wei = int(Web3.to_wei(priority_fee_gwei, "gwei"))
+        configured_fee_cap = str(
+            os.environ.get("AGENTDID_EXPERIMENT_MAX_FEE_PER_GAS_WEI", "")
+        ).strip()
+        configured_gas_cap = str(
+            os.environ.get("AGENTDID_LINEAGE_GAS_LIMIT_CAP", "")
+        ).strip()
+        self.max_fee_per_gas_wei = (
+            int(max_fee_per_gas_wei)
+            if max_fee_per_gas_wei is not None
+            else (int(configured_fee_cap) if configured_fee_cap else None)
+        )
+        self.gas_limit_cap = (
+            int(gas_limit_cap)
+            if gas_limit_cap is not None
+            else (int(configured_gas_cap) if configured_gas_cap else None)
+        )
+        if self.max_fee_per_gas_wei is not None and self.max_fee_per_gas_wei <= 0:
+            raise ValueError("max_fee_per_gas_wei must be positive")
+        if self.gas_limit_cap is not None and self.gas_limit_cap <= 0:
+            raise ValueError("gas_limit_cap must be positive")
         self._nonce_lock = threading.Lock()
 
     @classmethod
@@ -111,15 +135,29 @@ class LineageRegistryClient:
             latest_block = self.w3.eth.get_block("latest")
             base_fee = latest_block.get("baseFeePerGas")
             if base_fee is None:
-                tx_params["gasPrice"] = int(self.w3.eth.gas_price * 1.2)
+                gas_price = int(self.w3.eth.gas_price * 1.2)
+                if (
+                    self.max_fee_per_gas_wei is not None
+                    and gas_price > self.max_fee_per_gas_wei
+                ):
+                    raise RegistryTransactionError("TRANSACTION_FEE_CAP_EXCEEDED")
+                tx_params["gasPrice"] = gas_price
             else:
                 priority_fee = max(int(self.w3.eth.max_priority_fee), self.priority_fee_wei)
+                max_fee = int(base_fee) * 2 + priority_fee
+                if (
+                    self.max_fee_per_gas_wei is not None
+                    and max_fee > self.max_fee_per_gas_wei
+                ):
+                    raise RegistryTransactionError("TRANSACTION_FEE_CAP_EXCEEDED")
                 tx_params["maxPriorityFeePerGas"] = priority_fee
-                tx_params["maxFeePerGas"] = int(base_fee) * 2 + priority_fee
+                tx_params["maxFeePerGas"] = max_fee
                 tx_params["type"] = 2
             tx = function.build_transaction(tx_params)
             if "gas" not in tx:
                 tx["gas"] = int(self.w3.eth.estimate_gas(tx) * 1.2)
+            if self.gas_limit_cap is not None and int(tx["gas"]) > self.gas_limit_cap:
+                raise RegistryTransactionError("TRANSACTION_GAS_LIMIT_CAP_EXCEEDED")
             signed = self.w3.eth.account.sign_transaction(tx, key)
             tx_hash = self.w3.eth.send_raw_transaction(signed.raw_transaction)
         try:
@@ -131,22 +169,40 @@ class LineageRegistryClient:
                 receipt = self.w3.eth.get_transaction_receipt(tx_hash)
             except TransactionNotFound:
                 raise RegistryTransactionError(
-                    f"transaction still pending after timeout: {tx_hash.hex()}"
+                    f"transaction still pending after timeout: {tx_hash.hex()}",
+                    transaction_hash=tx_hash.hex(),
                 ) from exc
         if receipt.status != 1:
-            raise RegistryTransactionError(f"transaction reverted: {tx_hash.hex()}")
+            raise RegistryTransactionError(
+                f"transaction reverted: {tx_hash.hex()}",
+                transaction_hash=tx_hash.hex(),
+            )
         target_block = receipt.blockNumber + self.confirmations - 1
         if target_block > receipt.blockNumber:
             deadline = time.time() + self.receipt_timeout_seconds
             while self.w3.eth.block_number < target_block:
                 if time.time() >= deadline:
-                    raise TimeoutError("transaction confirmation wait timed out")
+                    raise RegistryTransactionError(
+                        "transaction confirmation wait timed out",
+                        transaction_hash=tx_hash.hex(),
+                    )
                 time.sleep(1)
+        confirmed = self.w3.eth.get_transaction_receipt(tx_hash)
+        if int(confirmed.status) != 1 or confirmed.blockHash != receipt.blockHash:
+            raise RegistryTransactionError(
+                f"transaction receipt changed before finality: {tx_hash.hex()}",
+                transaction_hash=tx_hash.hex(),
+            )
         return {
             "transaction_hash": tx_hash.hex(),
-            "block_number": receipt.blockNumber,
-            "gas_used": receipt.gasUsed,
+            "block_number": int(confirmed.blockNumber),
+            "block_hash": confirmed.blockHash.hex(),
+            "transaction_index": int(confirmed.transactionIndex),
+            "status": int(confirmed.status),
+            "gas_used": int(confirmed.gasUsed),
+            "effective_gas_price": int(confirmed.get("effectiveGasPrice") or 0),
             "confirmations": self.confirmations,
+            "confirmation_block_number": int(self.w3.eth.block_number),
         }
 
     def latest_block_number(self) -> int:

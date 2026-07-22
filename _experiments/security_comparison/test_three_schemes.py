@@ -91,8 +91,14 @@ class FakeLineage:
 
     def __init__(self, case_id: str) -> None:
         self.case_id = case_id
+        self.materialize_calls = 0
         self.evaluate_calls = 0
         self.transactions: list[dict[str, Any]] = []
+
+    def materialize(self) -> list[dict[str, Any]]:
+        self.materialize_calls += 1
+        self.transactions.append({"operation": "fake-materialization"})
+        return list(self.transactions)
 
     def evaluate(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         self.evaluate_calls += 1
@@ -196,6 +202,7 @@ class ThreeSchemeAdapterTests(unittest.TestCase):
                     self.assertTrue(decision.lineage["accepted"])
                     self.assertEqual({"sum": 42}, decision.lineage["execution_output"])
                     self.assertIsNotNone(fake_lineage)
+                    self.assertEqual(1, fake_lineage.materialize_calls)
                     self.assertEqual(1, fake_lineage.evaluate_calls)
 
                 replay_guards.add(bundle.independent_state["replay_guard_id"])
@@ -239,6 +246,7 @@ class ThreeSchemeAdapterTests(unittest.TestCase):
                 self.assertEqual("did-vc-vp", decision.detection_layer)
                 self.assertEqual("VP_CHALLENGE_MISMATCH", decision.protocol["code"])
                 if fake_lineage is not None:
+                    self.assertEqual(0, fake_lineage.materialize_calls)
                     self.assertEqual(0, fake_lineage.evaluate_calls)
 
     def test_a04_is_accepted_only_by_original_and_rejected_at_baseline(self) -> None:
@@ -256,6 +264,7 @@ class ThreeSchemeAdapterTests(unittest.TestCase):
                 self.assertIsNotNone(decision.baseline)
                 self.assertFalse(decision.baseline["accepted"])
                 if fake_lineage is not None:
+                    self.assertEqual(0, fake_lineage.materialize_calls)
                     self.assertEqual(0, fake_lineage.evaluate_calls)
 
     def test_a05_and_a06_have_stable_baseline_error_codes(self) -> None:
@@ -272,6 +281,7 @@ class ThreeSchemeAdapterTests(unittest.TestCase):
                     self.assertEqual(expected_code, decision.code)
                     self.assertEqual("baseline-agentdid", decision.detection_layer)
                     if fake_lineage is not None:
+                        self.assertEqual(0, fake_lineage.materialize_calls)
                         self.assertEqual(0, fake_lineage.evaluate_calls)
 
     def test_l01_is_rejected_only_after_protocol_and_baseline_pass(self) -> None:

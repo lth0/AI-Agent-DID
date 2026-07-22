@@ -23,7 +23,7 @@ from _experiments.security_comparison.cli_common import run_id_argument
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / ".codex" / "comparison_runs"
+DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "exp_result"
 DEFAULT_TEMP_ROOT = PROJECT_ROOT / ".codex" / "comparison_tmp"
 SCHEME_ALIASES = {
     "original": "original",
@@ -80,7 +80,7 @@ def _add_storage_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--output-root",
         default=str(DEFAULT_OUTPUT_ROOT),
-        help="final evidence root (default: .codex/comparison_runs)",
+        help="final evidence root (default: <repository>/exp_result)",
     )
     parser.add_argument(
         "--temp-root",
@@ -92,8 +92,8 @@ def _add_storage_arguments(parser: argparse.ArgumentParser) -> None:
         choices=("hardhat", "sepolia"),
         default="hardhat",
         help=(
-            "blockchain backend; Sepolia never falls back to Hardhat, and full "
-            "Sepolia runs remain blocked until complete preflight is available"
+            "blockchain backend; Sepolia requires strict preflight and never "
+            "falls back to Hardhat"
         ),
     )
 
@@ -139,7 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--timeout",
         dest="timeout_seconds",
         type=_positive_seconds,
-        default=300.0,
+        default=900.0,
         help="maximum runtime for each isolated child process",
     )
     full.add_argument(

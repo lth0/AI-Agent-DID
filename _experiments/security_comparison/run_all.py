@@ -11,8 +11,10 @@ import subprocess
 import sys
 import time
 import uuid
+from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
+from web3 import Web3
 
 from _experiments.security_comparison.cases import (
     CASE_BY_ID,
@@ -26,12 +28,20 @@ from _experiments.security_comparison.cases import (
 from _experiments.security_comparison.chain import (
     ChainConfig,
     HardhatNode,
+    configure_did_registry,
+    decode_lineage_events,
     deploy_local_contracts,
     load_actor_keys,
     local_config,
+    sepolia_config,
 )
 from _experiments.security_comparison.cli_common import redact_rpc_text, run_id_argument
 from _experiments.security_comparison.evidence import read_json, write_json
+from _experiments.security_comparison.preflight import (
+    DID_SETUP_GAS_UPPER_BOUND_PER_CONTROLLER,
+    FULL_LINEAGE_GAS_LIMIT_PER_TRANSACTION,
+    run_sepolia_full_preflight,
+)
 from _experiments.security_comparison.run_lineage_phase1 import _semantics_report
 from _experiments.security_comparison.run_robustness import (
     _collect_result as collect_experiment_result,
@@ -39,6 +49,7 @@ from _experiments.security_comparison.run_robustness import (
     _verify_evidence as verify_evidence,
 )
 from infrastructure.evidence_anchor import EthereumEvidenceAnchor
+from infrastructure.security import sha256_json
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -83,7 +94,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--timeout-seconds",
         type=_positive_seconds,
-        default=300.0,
+        default=900.0,
         help="maximum runtime for each child experiment",
     )
     parser.add_argument(
@@ -139,10 +150,12 @@ def build_child_command(
     output_root: Path,
     temp_root: Path,
     chain: ChainConfig,
+    full_preflight_path: Path | None = None,
+    full_preflight_hash: str | None = None,
 ) -> list[str]:
     """Build one child command without exposing RPC credentials."""
 
-    return [
+    command = [
         sys.executable,
         "-B",
         "-m",
@@ -163,6 +176,10 @@ def build_child_command(
         chain.did_registry_address,
         "--lineage-registry",
         chain.lineage_registry_address,
+        "--confirmations",
+        str(chain.confirmations),
+        "--rpc-timeout-seconds",
+        str(chain.rpc_timeout_seconds),
         "--lineage-epoch",
         str(item["lineage_epoch"]),
         "--output-root",
@@ -170,6 +187,16 @@ def build_child_command(
         "--temp-root",
         str(temp_root),
     ]
+    if full_preflight_path is not None or full_preflight_hash is not None:
+        if full_preflight_path is None or full_preflight_hash is None:
+            raise ValueError("full preflight path and hash must be supplied together")
+        command.extend([
+            "--full-preflight",
+            str(full_preflight_path),
+            "--full-preflight-hash",
+            full_preflight_hash,
+        ])
+    return command
 
 
 def _experiment_directory(
@@ -219,6 +246,7 @@ def _chain_activity(directory: Path) -> dict[str, Any]:
             "event_count": 0,
             "gas_used": 0,
             "event_names": [],
+            "chain": {},
         }
     artifact = read_json(path)
     transactions = artifact.get("transactions") or []
@@ -228,16 +256,17 @@ def _chain_activity(directory: Path) -> dict[str, Any]:
         "event_count": len(events),
         "gas_used": sum(int(item.get("gas_used") or 0) for item in transactions),
         "event_names": [str(item.get("event")) for item in events],
+        "chain": artifact.get("chain") or {},
     }
 
 
 def _expected_lineage_activity(scheme: str, case_id: str) -> int:
     if scheme != "lineage":
         return 0
+    if case_id in ROBUSTNESS_CASE_IDS:
+        return 0
     if case_id == "H00":
         return 8
-    if case_id in ROBUSTNESS_CASE_IDS:
-        return 6
     if case_id == "L09":
         return 10
     if case_id == "L12":
@@ -245,36 +274,68 @@ def _expected_lineage_activity(scheme: str, case_id: str) -> int:
     return 6
 
 
-def _enrich_chain_shape(result: dict[str, Any]) -> dict[str, Any]:
+def _expected_lineage_events(scheme: str, case_id: str) -> Counter[str]:
+    if scheme != "lineage" or case_id in ROBUSTNESS_CASE_IDS:
+        return Counter()
+    expected = Counter({
+        "BudgetCreated": 3,
+        "DelegationRegistered": 2,
+    })
+    if case_id == "H00":
+        expected.update({"InvocationStarted": 1, "InvocationFinished": 1})
+    elif case_id == "L09":
+        expected.update({"BudgetCreated": 2, "DelegationRegistered": 2})
+    elif case_id == "L12":
+        expected.update({"StatusRevoked": 1})
+    return expected
+
+
+def _enrich_chain_shape(
+    result: dict[str, Any],
+    expected_chain: ChainConfig | None = None,
+) -> dict[str, Any]:
     activity = _chain_activity(Path(str(result["output"])))
     expected_count = _expected_lineage_activity(
         str(result["scheme"]),
         str(result["case_id"]),
     )
     event_names = activity["event_names"]
-    invocation_shape_ok = (
-        event_names.count("InvocationStarted") == 1
-        and event_names.count("InvocationFinished") == 1
-        if result["scheme"] == "lineage" and result["case_id"] == "H00"
-        else "InvocationStarted" not in event_names
-        and "InvocationFinished" not in event_names
+    observed_events = Counter(event_names)
+    root_events = observed_events.pop("RootRegistered", 0) + observed_events.pop(
+        "EpochRotated", 0
     )
-    revocation_shape_ok = (
-        event_names.count("StatusRevoked") == 1
-        if result["scheme"] == "lineage" and result["case_id"] == "L12"
-        else "StatusRevoked" not in event_names
+    expected_events = _expected_lineage_events(
+        str(result["scheme"]),
+        str(result["case_id"]),
     )
+    exact_event_shape = bool(
+        root_events == (1 if expected_count else 0)
+        and observed_events == expected_events
+    )
+    chain_matches = True
+    if expected_chain is not None:
+        actual_chain = activity["chain"]
+        chain_matches = bool(
+            actual_chain.get("backend") == expected_chain.backend
+            and int(actual_chain.get("chain_id", -1)) == expected_chain.chain_id
+            and str(actual_chain.get("did_registry_address", "")).lower()
+            == expected_chain.did_registry_address.lower()
+            and str(actual_chain.get("lineage_registry_address", "")).lower()
+            == expected_chain.lineage_registry_address.lower()
+        )
     result.update({
         "lineage_transaction_count": activity["transaction_count"],
         "lineage_event_count": activity["event_count"],
         "lineage_gas_used": activity["gas_used"],
         "lineage_event_names": event_names,
         "expected_lineage_activity_count": expected_count,
+        "chain_config_matches_parent": chain_matches,
+        "lineage_event_multiset_matches": exact_event_shape,
         "lineage_chain_shape_passed": bool(
             activity["transaction_count"] == expected_count
             and activity["event_count"] == expected_count
-            and invocation_shape_ok
-            and revocation_shape_ok
+            and exact_event_shape
+            and chain_matches
         ),
     })
     return result
@@ -394,7 +455,15 @@ def _live_anchor_verification(
     checks: list[dict[str, Any]] = []
     try:
         actor_keys = load_actor_keys(chain.backend)
-        verifier = EthereumEvidenceAnchor(chain.rpc_url, actor_keys.chain_private_key)
+        verifier = EthereumEvidenceAnchor(
+            chain.rpc_url,
+            actor_keys.chain_private_key,
+            request_timeout_seconds=chain.rpc_timeout_seconds,
+            receipt_timeout_seconds=max(600.0, chain.rpc_timeout_seconds * 10),
+        )
+        verifier_address = verifier.account.address.lower()
+        actual_chain_id = int(verifier.w3.eth.chain_id)
+        latest_block = int(verifier.w3.eth.block_number)
         for result in results:
             transaction_hash = result.get("anchor_transaction")
             merkle_root = result.get("anchor_merkle_root")
@@ -411,13 +480,43 @@ def _live_anchor_verification(
                     str(merkle_root),
                 )
                 receipt = verifier.w3.eth.get_transaction_receipt(transaction_hash)
-                passed = bool(verified["matches"] and int(receipt.status) == 1)
+                block_number = verified.get("block_number")
+                confirmations_observed = (
+                    latest_block - int(block_number) + 1
+                    if block_number is not None
+                    else 0
+                )
+                chain_matches = bool(
+                    actual_chain_id == chain.chain_id
+                    and int(verified.get("chain_id") or -1) == chain.chain_id
+                )
+                sender_matches = str(verified.get("from") or "").lower() == verifier_address
+                recipient_matches = str(verified.get("to") or "").lower() == verifier_address
+                confirmation_matches = confirmations_observed >= chain.confirmations
+                passed = bool(
+                    verified["matches"]
+                    and int(receipt.status) == 1
+                    and chain_matches
+                    and sender_matches
+                    and recipient_matches
+                    and confirmation_matches
+                )
+                gas_used = int(receipt.gasUsed)
+                effective_gas_price = int(receipt.get("effectiveGasPrice") or 0)
                 checks.append({
                     "experiment_id": result["experiment_id"],
                     "transaction_hash": transaction_hash,
                     "merkle_root": merkle_root,
-                    "block_number": verified.get("block_number"),
+                    "block_number": block_number,
                     "receipt_status": int(receipt.status),
+                    "chain_id_matches": chain_matches,
+                    "sender_matches": sender_matches,
+                    "recipient_matches": recipient_matches,
+                    "confirmations_required": chain.confirmations,
+                    "confirmations_observed": confirmations_observed,
+                    "gas_used": gas_used,
+                    "effective_gas_price": effective_gas_price,
+                    "actual_cost_wei": gas_used * effective_gas_price,
                     "passed": passed,
                 })
             except Exception as exc:
@@ -444,7 +543,199 @@ def _live_anchor_verification(
         ),
         "verified": sum(bool(item["passed"]) for item in checks),
         "expected": FULL_EXPERIMENT_COUNT,
+        "actual_cost_wei": sum(
+            int(item.get("actual_cost_wei") or 0) for item in checks
+        ),
         "checks": checks,
+    }
+
+
+def _live_protocol_transaction_verification(
+    chain: ChainConfig,
+    results: list[dict[str, Any]],
+    did_setup: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Re-query DID and Lineage receipts from the canonical chain at run end."""
+
+    checks: list[dict[str, Any]] = []
+    event_checks: list[dict[str, Any]] = []
+    try:
+        w3 = Web3(Web3.HTTPProvider(
+            chain.rpc_url,
+            request_kwargs={"timeout": chain.rpc_timeout_seconds},
+        ))
+        if not w3.is_connected() or int(w3.eth.chain_id) != chain.chain_id:
+            raise RuntimeError("CHAIN_REVERIFICATION_CONNECTION_MISMATCH")
+        latest_block = int(w3.eth.block_number)
+        actor_keys = load_actor_keys(chain.backend)
+        relayer = actor_keys.chain_private_key
+        relayer_address = w3.eth.account.from_key(relayer).address
+
+        def check_transaction(
+            *,
+            category: str,
+            experiment_id: str,
+            recorded: dict[str, Any],
+            expected_sender: str,
+            expected_recipient: str,
+        ) -> None:
+            tx_hash = str(recorded.get("transaction_hash") or "")
+            if not tx_hash:
+                checks.append({
+                    "category": category,
+                    "experiment_id": experiment_id,
+                    "passed": False,
+                    "code": "TRANSACTION_HASH_MISSING",
+                })
+                return
+            try:
+                transaction = w3.eth.get_transaction(tx_hash)
+                receipt = w3.eth.get_transaction_receipt(tx_hash)
+                confirmations_observed = latest_block - int(receipt.blockNumber) + 1
+                recorded_block_hash = str(recorded.get("block_hash") or "").lower()
+                canonical_block_hash = receipt.blockHash.hex().lower()
+                optional_chain_id = transaction.get("chainId")
+                transaction_chain_matches = bool(
+                    optional_chain_id is None
+                    or int(optional_chain_id) == chain.chain_id
+                )
+                passed = bool(
+                    int(receipt.status) == 1
+                    and int(recorded.get("block_number", -1)) == int(receipt.blockNumber)
+                    and recorded_block_hash == canonical_block_hash
+                    and str(transaction.get("from") or "").lower()
+                    == expected_sender.lower()
+                    and str(transaction.get("to") or "").lower()
+                    == expected_recipient.lower()
+                    and confirmations_observed >= chain.confirmations
+                    and transaction_chain_matches
+                )
+                gas_used = int(receipt.gasUsed)
+                effective_gas_price = int(receipt.get("effectiveGasPrice") or 0)
+                checks.append({
+                    "category": category,
+                    "experiment_id": experiment_id,
+                    "transaction_hash": tx_hash,
+                    "block_number": int(receipt.blockNumber),
+                    "block_hash": canonical_block_hash,
+                    "status": int(receipt.status),
+                    "sender_matches": str(transaction.get("from") or "").lower()
+                    == expected_sender.lower(),
+                    "recipient_matches": str(transaction.get("to") or "").lower()
+                    == expected_recipient.lower(),
+                    "transaction_chain_matches": transaction_chain_matches,
+                    "confirmations_observed": confirmations_observed,
+                    "confirmations_required": chain.confirmations,
+                    "gas_used": gas_used,
+                    "effective_gas_price": effective_gas_price,
+                    "actual_cost_wei": gas_used * effective_gas_price,
+                    "passed": passed,
+                })
+            except Exception as exc:
+                checks.append({
+                    "category": category,
+                    "experiment_id": experiment_id,
+                    "transaction_hash": tx_hash,
+                    "passed": False,
+                    "code": "TRANSACTION_REVERSE_VERIFICATION_FAILED",
+                    "reason": type(exc).__name__,
+                })
+
+        identities = actor_keys.identities(chain.chain_id)
+        for item in (did_setup or {}).get("transactions", []):
+            recorded = item.get("transaction")
+            if not recorded:
+                continue
+            role = str(item.get("role") or "")
+            identity = identities.get(role)
+            if identity is None:
+                checks.append({
+                    "category": "did-setup",
+                    "experiment_id": f"did-setup:{role}",
+                    "passed": False,
+                    "code": "DID_SETUP_ROLE_UNKNOWN",
+                })
+                continue
+            check_transaction(
+                category="did-setup",
+                experiment_id=f"did-setup:{role}",
+                recorded=recorded,
+                expected_sender=identity.controller_address,
+                expected_recipient=chain.did_registry_address,
+            )
+
+        for result in results:
+            activity_path = Path(str(result["output"])) / "chain-activity.json"
+            activity = read_json(activity_path)
+            transactions = activity.get("transactions") or []
+            tx_hashes = []
+            for recorded in transactions:
+                tx_hash = str(recorded.get("transaction_hash") or "")
+                if tx_hash:
+                    tx_hashes.append(tx_hash)
+                check_transaction(
+                    category="lineage",
+                    experiment_id=str(result["experiment_id"]),
+                    recorded=recorded,
+                    expected_sender=relayer_address,
+                    expected_recipient=chain.lineage_registry_address,
+                )
+            try:
+                live_events = decode_lineage_events(chain, tx_hashes)
+                names = [str(item.get("event")) for item in live_events]
+                observed = Counter(names)
+                root_events = observed.pop("RootRegistered", 0) + observed.pop(
+                    "EpochRotated", 0
+                )
+                expected_count = _expected_lineage_activity(
+                    str(result["scheme"]),
+                    str(result["case_id"]),
+                )
+                expected_events = _expected_lineage_events(
+                    str(result["scheme"]),
+                    str(result["case_id"]),
+                )
+                event_passed = bool(
+                    len(live_events) == expected_count
+                    and root_events == (1 if expected_count else 0)
+                    and observed == expected_events
+                )
+                event_checks.append({
+                    "experiment_id": result["experiment_id"],
+                    "transaction_count": len(tx_hashes),
+                    "event_count": len(live_events),
+                    "event_names": names,
+                    "passed": event_passed,
+                })
+            except Exception as exc:
+                event_checks.append({
+                    "experiment_id": result["experiment_id"],
+                    "passed": False,
+                    "code": "LINEAGE_EVENT_REVERSE_VERIFICATION_FAILED",
+                    "reason": type(exc).__name__,
+                })
+    except Exception as exc:
+        return {
+            "passed": False,
+            "verified": 0,
+            "code": "PROTOCOL_TRANSACTION_VERIFIER_UNAVAILABLE",
+            "reason": type(exc).__name__,
+            "checks": checks,
+            "event_checks": event_checks,
+        }
+
+    return {
+        "passed": bool(
+            all(item.get("passed") for item in checks)
+            and len(event_checks) == len(results)
+            and all(item.get("passed") for item in event_checks)
+        ),
+        "verified": sum(bool(item.get("passed")) for item in checks),
+        "transaction_count": len(checks),
+        "event_experiment_count": len(event_checks),
+        "actual_cost_wei": sum(int(item.get("actual_cost_wei") or 0) for item in checks),
+        "checks": checks,
+        "event_checks": event_checks,
     }
 
 
@@ -462,6 +753,9 @@ def execute_full_plan(
     chain: ChainConfig,
     *,
     executor: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    full_preflight: dict[str, Any] | None = None,
+    full_preflight_path: Path | None = None,
+    did_setup: dict[str, Any] | None = None,
 ) -> int:
     output_root = Path(args.output_root).resolve()
     temp_root = Path(args.temp_root).resolve()
@@ -469,6 +763,25 @@ def execute_full_plan(
     orchestration_directory = run_directory / "orchestration"
     orchestration_directory.mkdir(parents=True, exist_ok=False)
     plan = build_full_plan(args.run_id)
+    preflight_hash = sha256_json(full_preflight) if full_preflight is not None else None
+    preflight_reference = (
+        {
+            "path": str(full_preflight_path),
+            "sha256": preflight_hash,
+            "code": full_preflight.get("code"),
+        }
+        if full_preflight is not None and full_preflight_path is not None
+        else None
+    )
+    did_setup_transactions = [
+        item.get("transaction")
+        for item in (did_setup or {}).get("transactions", [])
+        if item.get("transaction")
+    ]
+    did_setup_transaction_count = len(did_setup_transactions)
+    did_setup_gas_used = sum(
+        int(item.get("gas_used") or 0) for item in did_setup_transactions
+    )
     write_json(run_directory / "run-config.json", {
         "schema_version": "agentdid-full-run-config-v1",
         "run_id": args.run_id,
@@ -478,6 +791,14 @@ def execute_full_plan(
         "case_ids": list(FULL_CASE_IDS),
         "schemes": list(SCHEMES),
         "chain": chain.public_dict(),
+        "preflight": preflight_reference,
+        "shared_did_setup": {
+            "path": str(run_directory / "setup" / "did-registry.json")
+            if did_setup is not None
+            else None,
+            "transaction_count": did_setup_transaction_count,
+            "gas_used": did_setup_gas_used,
+        },
         "timeout_seconds": args.timeout_seconds,
         "fail_fast": bool(args.fail_fast),
         "plan": plan,
@@ -486,6 +807,16 @@ def execute_full_plan(
 
     environment = os.environ.copy()
     environment["AGENTDID_EXPERIMENT_RPC_URL"] = chain.rpc_url
+    environment["AGENTDID_EXPERIMENT_CONFIRMATIONS"] = str(chain.confirmations)
+    environment["AGENTDID_EXPERIMENT_RPC_TIMEOUT_SECONDS"] = str(
+        chain.rpc_timeout_seconds
+    )
+    if full_preflight is not None:
+        fee_cap = int(full_preflight["gas_budget"]["fee_upper_bound_wei"])
+        environment["AGENTDID_EXPERIMENT_MAX_FEE_PER_GAS_WEI"] = str(fee_cap)
+        environment["AGENTDID_LINEAGE_GAS_LIMIT_CAP"] = str(
+            FULL_LINEAGE_GAS_LIMIT_PER_TRANSACTION
+        )
     results: list[dict[str, Any]] = []
     configs: list[dict[str, Any]] = []
     run_started = time.perf_counter()
@@ -497,6 +828,8 @@ def execute_full_plan(
             output_root=output_root,
             temp_root=temp_root,
             chain=chain,
+            full_preflight_path=full_preflight_path,
+            full_preflight_hash=preflight_hash,
         )
         stem = f"{item['ordinal']:02d}-{item['scheme']}-{item['case_id']}"
         started_at = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -563,7 +896,7 @@ def execute_full_plan(
             "duration_ms": round((time.perf_counter() - started) * 1000, 6),
         })
         try:
-            _enrich_chain_shape(result)
+            _enrich_chain_shape(result, chain)
         except Exception as exc:
             result.update({
                 "status": "INFRA_ERROR",
@@ -593,7 +926,7 @@ def execute_full_plan(
             "passed": result["passed"],
             "code": result["code"],
         }, ensure_ascii=False), flush=True)
-        if args.fail_fast and (
+        if (args.fail_fast or chain.backend == "sepolia") and (
             result["status"] != "COMPLETED"
             or not result["passed"]
             or int(result.get("return_code", 1)) != 0
@@ -635,11 +968,17 @@ def execute_full_plan(
             "reason": type(exc).__name__,
             "expected_case_hash_count": len(FULL_CASE_IDS),
         }
+    protocol_transaction_reverification = _live_protocol_transaction_verification(
+        chain,
+        results,
+        did_setup,
+    )
     anchor_reverification = _live_anchor_verification(chain, results)
     completed_count = sum(item["status"] == "COMPLETED" for item in results)
     infra_errors = sum(item["status"] == "INFRA_ERROR" for item in results)
     passed_count = sum(bool(item["passed"]) for item in results)
     anchors_verified = sum(bool(item.get("anchor_matches")) for item in results)
+    anchor_transaction_count = sum(bool(item.get("anchor_transaction")) for item in results)
     chain_shapes_ok = bool(
         len(results) == FULL_EXPERIMENT_COUNT
         and all(item["lineage_chain_shape_passed"] for item in results)
@@ -671,6 +1010,7 @@ def execute_full_plan(
         and chain_shapes_ok
         and all(uniqueness.values())
         and all(item["evidence_integrity"] for item in results)
+        and protocol_transaction_reverification["passed"]
         and anchor_reverification["passed"]
     )
     integrity_ok = bool(
@@ -696,9 +1036,16 @@ def execute_full_plan(
         "chain": chain.public_dict(),
         "chain_lifecycle": {
             "shared_chain": True,
-            "shared_contract_deployment": True,
+            "shared_contract_deployment": chain.backend == "hardhat",
+            "predeployed_contracts": chain.backend == "sepolia",
+            "shared_remote_config": chain.backend == "sepolia",
             "serial_children": True,
+            "fallback": False,
         },
+        "preflight": preflight_reference,
+        "did_setup_transaction_count": did_setup_transaction_count,
+        "did_setup_gas_used": did_setup_gas_used,
+        "anchor_transaction_count": anchor_transaction_count,
         "scheme_metrics": _scheme_metrics(results),
         "case_metrics": _case_metrics(results),
         "lineage_transaction_count": sum(
@@ -709,12 +1056,27 @@ def execute_full_plan(
         ),
         "lineage_gas_used": sum(int(item["lineage_gas_used"]) for item in results),
         "anchor_gas_used": sum(int(item.get("anchor_gas_used") or 0) for item in results),
+        "total_onchain_transaction_count": (
+            did_setup_transaction_count
+            + sum(int(item["lineage_transaction_count"]) for item in results)
+            + anchor_transaction_count
+        ),
+        "total_onchain_gas_used": (
+            did_setup_gas_used
+            + sum(int(item["lineage_gas_used"]) for item in results)
+            + sum(int(item.get("anchor_gas_used") or 0) for item in results)
+        ),
         "lineage_chain_shapes_passed": chain_shapes_ok,
         "isolation": isolation,
         "scenario_semantics": semantics,
         "uniqueness": uniqueness,
         "evidence_integrity": evidence_checks,
         "anchor_reverse_verification": anchor_reverification,
+        "protocol_transaction_reverse_verification": protocol_transaction_reverification,
+        "actual_onchain_cost_wei": (
+            int(protocol_transaction_reverification.get("actual_cost_wei") or 0)
+            + int(anchor_reverification.get("actual_cost_wei") or 0)
+        ),
         "infrastructure_ok": infrastructure_ok,
         "integrity_ok": integrity_ok,
         "exit_code": exit_code,
@@ -737,11 +1099,16 @@ def execute_full_plan(
         "infra_errors": infra_errors,
         "passed": passed_count,
         "anchors_verified": anchors_verified,
+        "preflight": preflight_reference,
+        "did_setup_transaction_count": did_setup_transaction_count,
+        "did_setup_gas_used": did_setup_gas_used,
+        "anchor_transaction_count": anchor_transaction_count,
         "lineage_chain_shapes_passed": chain_shapes_ok,
         "isolation": isolation,
         "scenario_semantics": semantics,
         "uniqueness": uniqueness,
         "anchor_reverse_verification": anchor_reverification,
+        "protocol_transaction_reverse_verification": protocol_transaction_reverification,
         "infrastructure_ok": infrastructure_ok,
         "integrity_ok": integrity_ok,
         "exit_code": exit_code,
@@ -755,6 +1122,7 @@ def execute_full_plan(
         "integrity_ok": integrity_ok,
         "completed": completed_count,
         "anchors_verified": anchors_verified,
+        "chain_backend": chain.backend,
         "exit_code": exit_code,
     }, ensure_ascii=False))
     return exit_code
@@ -794,28 +1162,116 @@ def run(args: argparse.Namespace) -> int:
         return existing_error
 
     if args.chain == "sepolia":
-        print(json.dumps({
-            "status": "INFRA_ERROR",
-            "code": "SEPOLIA_FULL_PREFLIGHT_INCOMPLETE",
-            "reason": (
-                "full Sepolia execution is disabled until balance, relayer, "
-                "Lineage Registry and gas-budget preflight checks are implemented"
-            ),
-            "fallback": False,
-            "exit_code": 1,
-        }, ensure_ascii=False))
-        return 1
+        run_directory = Path(args.output_root).resolve() / args.run_id
+        preflight_path = run_directory / "preflight.json"
+        try:
+            chain = sepolia_config()
+        except Exception as exc:
+            configured_rpc = os.environ.get("AGENTDID_EXPERIMENT_RPC_URL", "").strip()
+            report = {
+                "schema_version": "agentdid-sepolia-full-preflight-v1",
+                "status": "FAILED",
+                "passed": False,
+                "code": "SEPOLIA_CONFIG_INVALID",
+                "run_id": args.run_id,
+                "planned": FULL_EXPERIMENT_COUNT,
+                "started": 0,
+                "fallback": False,
+                "reason": redact_rpc_text(
+                    f"{type(exc).__name__}: {exc}",
+                    configured_rpc,
+                ),
+            }
+            write_json(preflight_path, report)
+            print(json.dumps({
+                "status": "INFRA_ERROR",
+                "code": report["code"],
+                "preflight": str(preflight_path),
+                "fallback": False,
+                "exit_code": 1,
+            }, ensure_ascii=False))
+            return 1
+
+        preflight = run_sepolia_full_preflight(
+            chain,
+            run_id=args.run_id,
+            plan=plan,
+            child_timeout_seconds=args.timeout_seconds,
+        )
+        write_json(preflight_path, preflight)
+        if not preflight.get("passed"):
+            print(json.dumps({
+                "status": "INFRA_ERROR",
+                "code": preflight.get("code", "SEPOLIA_FULL_PREFLIGHT_FAILED"),
+                "preflight": str(preflight_path),
+                "fallback": False,
+                "exit_code": 1,
+            }, ensure_ascii=False))
+            return 1
+
+        setup_path = run_directory / "setup" / "did-registry.json"
+        try:
+            actor_keys = load_actor_keys("sepolia")
+            did_setup = configure_did_registry(
+                chain,
+                actor_keys.identities(chain.chain_id),
+                actor_keys,
+                max_fee_per_gas_wei=int(
+                    preflight["gas_budget"]["fee_upper_bound_wei"]
+                ),
+                gas_limit_cap=DID_SETUP_GAS_UPPER_BOUND_PER_CONTROLLER,
+                allowed_setup_roles=set(
+                    preflight["did_setup_plan"]["roles_requiring_setup"]
+                ),
+            )
+            write_json(setup_path, did_setup)
+        except Exception as exc:
+            reason = redact_rpc_text(
+                f"{type(exc).__name__}: {exc}",
+                chain.rpc_url,
+            )
+            failure = {
+                "schema_version": "agentdid-sepolia-shared-setup-error-v1",
+                "status": "INFRA_ERROR",
+                "code": "SEPOLIA_SHARED_DID_SETUP_FAILED",
+                "run_id": args.run_id,
+                "reason": reason,
+                "fallback": False,
+            }
+            write_json(run_directory / "setup" / "failure.json", failure)
+            print(json.dumps({**failure, "exit_code": 1}, ensure_ascii=False))
+            return 1
+        return execute_full_plan(
+            args,
+            chain,
+            full_preflight=preflight,
+            full_preflight_path=preflight_path,
+            did_setup=did_setup,
+        )
 
     log_directory = Path(args.temp_root).resolve() / args.run_id / "shared-chain"
     try:
         with HardhatNode(log_directory):
             chain = local_config(deploy_local_contracts())
-            return execute_full_plan(args, chain)
+            actor_keys = load_actor_keys("hardhat")
+            did_setup = configure_did_registry(
+                chain,
+                actor_keys.identities(chain.chain_id),
+                actor_keys,
+            )
+            write_json(
+                Path(args.output_root).resolve()
+                / args.run_id
+                / "setup"
+                / "did-registry.json",
+                did_setup,
+            )
+            return execute_full_plan(args, chain, did_setup=did_setup)
     except Exception as exc:
         print(json.dumps({
             "status": "INFRA_ERROR",
             "code": "FULL_RUN_SETUP_FAILED",
-            "reason": f"{type(exc).__name__}: {exc}",
+            "reason": redact_rpc_text(f"{type(exc).__name__}: {exc}"),
             "exit_code": 1,
         }, ensure_ascii=False))
         return 1

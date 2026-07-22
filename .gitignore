@@ -30,6 +30,7 @@ agents_4_key.json
 data/verifiers_key.json
 data/holders_key.json
 .codex/
+/exp_result/
 *.log
 agents/*/data/
 _experiments/data/

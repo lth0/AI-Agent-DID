@@ -736,6 +736,7 @@ class LineageAgentDidAdapter(BaselineAgentDidAdapter):
         # until both lower layers have passed.
         if bundle.lineage is None:
             raise ValueError("Lineage-AgentDID requires a Lineage case")
+        bundle.lineage.materialize()
         lineage_decision, transactions = bundle.lineage.evaluate()
         return SchemeDecision(
             bool(lineage_decision["accepted"]),

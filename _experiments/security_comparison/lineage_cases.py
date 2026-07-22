@@ -4,7 +4,8 @@ import dataclasses
 import hashlib
 import time
 from dataclasses import dataclass
-from typing import Any
+from functools import partial
+from typing import Any, Callable
 
 from eth_account import Account
 from web3 import Web3
@@ -57,6 +58,33 @@ class LineageCase:
     registry: LineageRegistryClient
     transactions: list[dict[str, Any]]
     mutation: str
+    activation_steps: list[tuple[str, Callable[[], dict[str, Any]]]]
+    activation_started: bool = False
+    onchain_materialized: bool = False
+
+    def materialize(self) -> list[dict[str, Any]]:
+        """Publish prepared Lineage state after lower-layer verification passes."""
+
+        if self.onchain_materialized:
+            return self.transactions
+        if self.activation_started:
+            raise RuntimeError("LINEAGE_MATERIALIZATION_ALREADY_STARTED")
+        self.activation_started = True
+        for label, action in self.activation_steps:
+            try:
+                self.transactions.append(_tx(label, action()))
+            except Exception as exc:
+                transaction_hash = getattr(exc, "transaction_hash", None)
+                if transaction_hash:
+                    self.transactions.append({
+                        "operation": label,
+                        "transaction_hash": str(transaction_hash),
+                        "status": "UNCERTAIN",
+                        "error_type": type(exc).__name__,
+                    })
+                raise
+        self.onchain_materialized = True
+        return self.transactions
 
     def public_dict(self) -> dict[str, Any]:
         recovered_signer = recover_typed_signer(
@@ -79,6 +107,9 @@ class LineageCase:
             "body": self.body,
             "expected_audience": self.expected_audience,
             "mutation": self.mutation,
+            "prepared": True,
+            "onchain_materialized": self.onchain_materialized,
+            "enforcement_reached": self.onchain_materialized,
             "request_signature_control": {
                 "passed": recovered_signer.lower() == expected_signer.lower(),
                 "recovered_signer": recovered_signer,
@@ -220,26 +251,39 @@ def build_lineage_case(
         verifying_contract=contract,
     )
     registry = LineageRegistryClient(
-        Web3(Web3.HTTPProvider(chain_config.rpc_url)),
+        Web3(Web3.HTTPProvider(
+            chain_config.rpc_url,
+            request_kwargs={"timeout": chain_config.rpc_timeout_seconds},
+        )),
         contract,
         relayer_private_key=chain_private_key,
         confirmations=chain_config.confirmations,
     )
     transactions: list[dict[str, Any]] = []
+    activation_steps: list[tuple[str, Callable[[], dict[str, Any]]]] = []
     if state["active"]:
-        transactions.append(_tx(
+        activation_steps.append((
             "rotate_epoch",
-            registry.rotate_epoch(epoch, chain_private_key, revoke_previous=True),
+            partial(
+                registry.rotate_epoch,
+                epoch,
+                chain_private_key,
+                revoke_previous=True,
+            ),
         ))
     else:
-        transactions.append(_tx("register_root", registry.register_root(epoch, chain_private_key)))
+        activation_steps.append((
+            "register_root",
+            partial(registry.register_root, epoch, chain_private_key),
+        ))
 
     root_budget_id = "0x" + hashlib.sha256(
         f"{experiment_id}:root-budget".encode("utf-8")
     ).hexdigest()
-    transactions.append(_tx(
+    activation_steps.append((
         "create_root_budget",
-        registry.create_root_budget(
+        partial(
+            registry.create_root_budget,
             root_did,
             root_budget_id,
             BudgetLimits(1000, 10_000, 20),
@@ -287,13 +331,18 @@ def build_lineage_case(
         chain_id=chain_id,
         verifying_contract=contract,
     )
-    transactions.append(_tx(
+    activation_steps.append((
         "register_persistent",
-        registry.register_delegation(first, epoch_private_key),
+        partial(registry.register_delegation, first, epoch_private_key),
     ))
-    transactions.append(_tx(
+    activation_steps.append((
         "reserve_persistent_budget",
-        registry.reserve_child_budget(root_budget_id, first, epoch_private_key),
+        partial(
+            registry.reserve_child_budget,
+            root_budget_id,
+            first,
+            epoch_private_key,
+        ),
     ))
 
     child_permission = PolicyEngine().attenuate(
@@ -332,17 +381,23 @@ def build_lineage_case(
         chain_id=chain_id,
         verifying_contract=contract,
     )
-    transactions.append(_tx(
+    activation_steps.append((
         "register_session",
-        registry.register_delegation(
+        partial(
+            registry.register_delegation,
             second,
             persistent.delegation_private_key,
             parent=first,
         ),
     ))
-    transactions.append(_tx(
+    activation_steps.append((
         "reserve_session_budget",
-        registry.reserve_child_budget(first_budget, second, persistent.delegation_private_key),
+        partial(
+            registry.reserve_child_budget,
+            first_budget,
+            second,
+            persistent.delegation_private_key,
+        ),
     ))
 
     request = LineageInvocation(
@@ -503,29 +558,32 @@ def build_lineage_case(
             chain_id=chain_id,
             verifying_contract=contract,
         )
-        transactions.append(_tx(
+        activation_steps.append((
             "register_other_persistent",
-            registry.register_delegation(other_first, epoch_private_key),
+            partial(registry.register_delegation, other_first, epoch_private_key),
         ))
-        transactions.append(_tx(
+        activation_steps.append((
             "reserve_other_persistent_budget",
-            registry.reserve_child_budget(
+            partial(
+                registry.reserve_child_budget,
                 root_budget_id,
                 other_first,
                 epoch_private_key,
             ),
         ))
-        transactions.append(_tx(
+        activation_steps.append((
             "register_other_session",
-            registry.register_delegation(
+            partial(
+                registry.register_delegation,
                 other_second,
                 other_persistent.delegation_private_key,
                 parent=other_first,
             ),
         ))
-        transactions.append(_tx(
+        activation_steps.append((
             "reserve_other_session_budget",
-            registry.reserve_child_budget(
+            partial(
+                registry.reserve_child_budget,
                 other_first_budget,
                 other_second,
                 other_persistent.delegation_private_key,
@@ -556,9 +614,15 @@ def build_lineage_case(
         invocation = _resign(invocation, session, chain_id, contract, audience=OTHER_AUDIENCE)
         mutation = "cross_audience_replay"
     elif case_id == "L12":
-        transactions.append(_tx(
+        activation_steps.append((
             "revoke_ancestor",
-            registry.revoke(root_did, "node", persistent.did, chain_private_key),
+            partial(
+                registry.revoke,
+                root_did,
+                "node",
+                persistent.did,
+                chain_private_key,
+            ),
         ))
         mutation = "ancestor_revocation"
     elif case_id == "L13":
@@ -581,4 +645,5 @@ def build_lineage_case(
         registry=registry,
         transactions=transactions,
         mutation=mutation,
+        activation_steps=activation_steps,
     )

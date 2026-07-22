@@ -12,6 +12,24 @@ import main as entrypoint
 
 
 class MainCliTests(unittest.TestCase):
+    def test_default_output_root_is_repository_exp_result(self) -> None:
+        parser = entrypoint.build_parser()
+
+        for command in (
+            ["single", "--scheme", "original", "--case", "H00"],
+            ["all"],
+        ):
+            with self.subTest(command=command):
+                args = parser.parse_args(command)
+                self.assertEqual(
+                    entrypoint.PROJECT_ROOT / "exp_result",
+                    Path(args.output_root),
+                )
+                self.assertEqual(
+                    entrypoint.PROJECT_ROOT / ".codex" / "comparison_tmp",
+                    Path(args.temp_root),
+                )
+
     def test_single_routes_normalized_scheme_and_case(self) -> None:
         with patch("main.run_single", return_value=0) as run_single, patch(
             "main.run_full"

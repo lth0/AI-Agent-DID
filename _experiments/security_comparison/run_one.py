@@ -44,7 +44,10 @@ from _experiments.security_comparison.evidence import (
     read_json,
     write_json,
 )
-from _experiments.security_comparison.preflight import run_sepolia_did_preflight
+from _experiments.security_comparison.preflight import (
+    run_sepolia_did_preflight,
+    validate_full_preflight_attestation,
+)
 from infrastructure.security import sha256_json
 
 
@@ -65,6 +68,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--chain-id", type=int)
     parser.add_argument("--did-registry")
     parser.add_argument("--lineage-registry")
+    parser.add_argument("--confirmations", type=int)
+    parser.add_argument("--rpc-timeout-seconds", type=float)
+    parser.add_argument("--full-preflight")
+    parser.add_argument("--full-preflight-hash")
     parser.add_argument("--lineage-epoch", type=int, default=1)
     parser.add_argument(
         "--output-root",
@@ -93,12 +100,29 @@ def _config_from_args(args: argparse.Namespace) -> ChainConfig | None:
         raise ValueError("Sepolia mode requires chain ID 11155111")
     from web3 import Web3
 
+    confirmations = (
+        args.confirmations
+        if args.confirmations is not None
+        else int(os.environ.get("AGENTDID_EXPERIMENT_CONFIRMATIONS", "1"))
+    )
+    rpc_timeout_seconds = (
+        args.rpc_timeout_seconds
+        if args.rpc_timeout_seconds is not None
+        else float(os.environ.get("AGENTDID_EXPERIMENT_RPC_TIMEOUT_SECONDS", "15"))
+    )
+    if confirmations < 1:
+        raise ValueError("confirmations must be at least one")
+    if rpc_timeout_seconds <= 0:
+        raise ValueError("RPC timeout must be greater than zero")
+
     return ChainConfig(
         backend=args.chain,
         rpc_url=rpc_url,
         chain_id=args.chain_id,
         did_registry_address=Web3.to_checksum_address(args.did_registry),
         lineage_registry_address=Web3.to_checksum_address(args.lineage_registry),
+        confirmations=confirmations,
+        rpc_timeout_seconds=rpc_timeout_seconds,
     )
 
 
@@ -165,6 +189,7 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
         case_name=case.name,
         chain_backend=chain_config.backend,
     )
+    bundle: Any | None = None
     try:
         actor_keys = load_actor_keys(chain_config.backend)
         bundle = build_experiment_bundle(
@@ -256,10 +281,15 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
             temp_directory / "lineage-evidence.json",
             {
                 "enabled": bundle.lineage is not None,
+                "prepared": bundle.lineage is not None,
+                "onchain_materialized": bool(
+                    bundle.lineage and bundle.lineage.onchain_materialized
+                ),
+                "enforcement_reached": False,
                 "isolation": bundle.independent_state["lineage"],
                 "evidence": bundle.lineage.public_dict() if bundle.lineage else None,
                 "reason": (
-                    None
+                    "Lineage state is prepared off-chain and awaits lower-layer verification"
                     if bundle.lineage
                     else "scheme records but does not enforce the Lineage control request"
                 ),
@@ -364,11 +394,18 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
                 temp_directory / "lineage-evidence.json",
                 {
                     "enabled": True,
+                    "prepared": True,
+                    "onchain_materialized": bundle.lineage.onchain_materialized,
+                    "enforcement_reached": decision.lineage is not None,
                     "isolation": bundle.independent_state["lineage"],
                     "evidence": bundle.lineage.public_dict(),
                     "decision": decision.lineage,
                     "execution_output": execution_output,
-                    "reason": None,
+                    "reason": (
+                        None
+                        if decision.lineage is not None
+                        else "lower-layer verification rejected the request before Lineage materialization"
+                    ),
                     "robustness_check": LINEAGE_ROBUSTNESS_CHECKS.get(case.case_id),
                 },
             )
@@ -520,6 +557,25 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
         )
         (temp_directory / "stdout.log").write_text("", encoding="utf-8")
         (temp_directory / "stderr.log").write_text(safe_traceback, encoding="utf-8")
+        partial_transactions = (
+            list(bundle.lineage.transactions)
+            if bundle is not None and bundle.lineage is not None
+            else []
+        )
+        if partial_transactions:
+            partial_hashes = _transaction_hashes(partial_transactions)
+            try:
+                partial_events = decode_lineage_events(chain_config, partial_hashes)
+            except Exception:
+                partial_events = []
+            write_json(temp_directory / "chain-activity.json", {
+                "schema_version": "agentdid-comparison-chain-activity-v1",
+                "status": "PARTIAL_INFRA_ERROR",
+                "chain": chain_config.public_dict(),
+                "shared_did_setup": "../../../setup/did-registry.json",
+                "transactions": partial_transactions,
+                "lineage_events": partial_events,
+            })
         build_evidence_manifest(temp_directory, run_id=args.run_id, experiment_id=experiment_id)
         finalize_experiment(temp_directory, final_directory)
         return 1, final_directory
@@ -527,19 +583,54 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
 
 def _run_with_config(args: argparse.Namespace, config: ChainConfig) -> int:
     if config.backend == "sepolia":
-        report = run_sepolia_did_preflight(config)
-        preflight_path = (
-            Path(args.output_root).resolve() / args.run_id / "preflight.json"
-        )
-        write_json(preflight_path, report)
-        if not report["passed"]:
+        parent_preflight = getattr(args, "full_preflight", None)
+        parent_preflight_hash = getattr(args, "full_preflight_hash", None)
+        if bool(parent_preflight) != bool(parent_preflight_hash):
             print(json.dumps({
                 "status": "INFRA_ERROR",
-                "code": report["code"],
-                "preflight": str(preflight_path),
+                "code": "FULL_PREFLIGHT_ATTESTATION_INVALID",
+                "reason": "preflight path and hash must be supplied together",
                 "exit_code": 1,
             }, ensure_ascii=False))
             return 1
+        if parent_preflight:
+            try:
+                expected_path = (
+                    Path(args.output_root).resolve() / args.run_id / "preflight.json"
+                )
+                actual_path = Path(parent_preflight).resolve()
+                if actual_path != expected_path:
+                    raise RuntimeError("FULL_PREFLIGHT_PATH_MISMATCH")
+                report = read_json(actual_path)
+                validate_full_preflight_attestation(
+                    report,
+                    expected_hash=str(parent_preflight_hash),
+                    config=config,
+                    run_id=args.run_id,
+                    experiment_id=str(args.experiment_id or ""),
+                )
+            except Exception as exc:
+                print(json.dumps({
+                    "status": "INFRA_ERROR",
+                    "code": "FULL_PREFLIGHT_ATTESTATION_INVALID",
+                    "reason": type(exc).__name__,
+                    "exit_code": 1,
+                }, ensure_ascii=False))
+                return 1
+        else:
+            report = run_sepolia_did_preflight(config)
+            preflight_path = (
+                Path(args.output_root).resolve() / args.run_id / "preflight.json"
+            )
+            write_json(preflight_path, report)
+            if not report["passed"]:
+                print(json.dumps({
+                    "status": "INFRA_ERROR",
+                    "code": report["code"],
+                    "preflight": str(preflight_path),
+                    "exit_code": 1,
+                }, ensure_ascii=False))
+                return 1
     code, output = execute_experiment(args, config)
     print(json.dumps({"output": str(output), "exit_code": code}, ensure_ascii=False))
     return code
