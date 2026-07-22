@@ -127,7 +127,46 @@ This project requires both Python and Node.js environments. To ensure system sta
 
 ## 🚀 Usage
 
-This project supports two running modes: **2v2 Full Demo** and **Massive Experiments**.
+This project provides a unified DID comparison entry together with the **2v2 Full Demo** and **Massive Experiments** workflows.
+
+### Unified AgentDID Comparison Entry
+
+The repository-root `main.py` is the canonical entry for the three DID schemes and all 21 comparison cases.
+
+List the supported schemes and cases:
+
+```powershell
+conda run -n agentdid python -B main.py list
+```
+
+Run exactly one isolated scheme/case instance:
+
+```powershell
+conda run -n agentdid python -B main.py single --scheme baseline --case A04
+conda run -n agentdid python -B main.py single --scheme Lineage-AgentDID --case L12
+```
+
+Run the complete `21 cases × 3 schemes = 63 experiments` matrix on one shared local Hardhat deployment:
+
+```powershell
+conda run -n agentdid python -B main.py all
+```
+
+Inspect the full plan without starting a chain:
+
+```powershell
+conda run -n agentdid python -B main.py all --dry-run
+```
+
+Important parameters:
+
+- `--scheme`: `original`, `baseline`, `lineage`, or the corresponding `*-AgentDID` label.
+- `--case` / `--case-id`: `H00`, `A01-A06`, or `L01-L14`; values are case-insensitive.
+- `--chain`: `hardhat` (default) or `sepolia`. Single-instance Sepolia runs fail closed without fallback. Full Sepolia execution is currently blocked until its balance, relayer, Lineage Registry and Gas-budget preflight is complete.
+- `--run-id`, `--output-root`, `--temp-root`: control run identity and evidence locations.
+- Full mode also supports `--timeout-seconds`, `--fail-fast`, and `--dry-run`; it intentionally does not accept scheme/case filters.
+
+Every successful full run writes `summary.json`, `decisions.csv`, `comparison-table.csv`, and `integrity-report.json` under `.codex/comparison_runs/<run_id>/`. Exit code `0` means all expected responses and integrity checks passed, `1` means infrastructure or evidence failure, and `2` means all experiments completed but at least one response did not match the expected vector.
 
 ### Mode 1: 2v2 Full Demo
 > **Scenario**: Demonstrates the complete interaction cycle between 2 Holders and 2 Verifiers.

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
-from _experiments.security_comparison.cases import CASES
+from _experiments.security_comparison.cases import CASES, ROBUSTNESS_CASE_IDS
 from _experiments.security_comparison.scenarios import build_control_scenario
 from infrastructure.agentdid_protocol import recover_json
 from infrastructure.security import canonical_json
@@ -59,19 +59,28 @@ class ControlScenarioTests(unittest.TestCase):
                         canonical_json(scenario["baseline"]), canonical_json(current)
                     )
                     self.assertNotEqual("legitimate", scenario["mutation"])
+                elif case.case_id in ROBUSTNESS_CASE_IDS:
+                    self.assertEqual(
+                        canonical_json(scenario["baseline"]), canonical_json(current)
+                    )
+                    self.assertEqual("robustness-check-input", scenario["mutation"])
+                    self.assertEqual(
+                        "agent-robustness",
+                        scenario["scenario_semantics"]["family"],
+                    )
                 else:
                     self.assertEqual(
                         canonical_json(scenario["baseline"]), canonical_json(current)
                     )
                     self.assertEqual("legitimate", scenario["mutation"])
 
-    def test_attack_semantics_hash_is_stable_across_experiment_instances(self) -> None:
+    def test_scenario_semantics_hash_is_stable_across_experiment_instances(self) -> None:
         for case in CASES:
             with self.subTest(case_id=case.case_id):
                 first = self.build(case.case_id, "first")
                 second = self.build(case.case_id, "second")
                 self.assertEqual(
-                    first["attack_semantics_hash"], second["attack_semantics_hash"]
+                    first["scenario_semantics_hash"], second["scenario_semantics_hash"]
                 )
 
     def test_experiment_isolation_identifiers_are_unique(self) -> None:

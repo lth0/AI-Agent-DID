@@ -330,12 +330,23 @@ class LineageRegistryClient:
     def validate_chain_state(
         self, epoch: EpochKeyCertificate, credentials: list[DelegationCredential]
     ) -> tuple[bool, str, int | None]:
+        checked_block = int(self.w3.eth.block_number)
+        for credential in credentials:
+            record = self.contract.functions.delegations(
+                bytes32_id(credential.jti)
+            ).call(block_identifier=checked_block)
+            if not bool(record[14]):
+                return False, "CREDENTIAL_INACTIVE", checked_block
+            registered_hash = HexBytes(record[2])
+            presented_hash = HexBytes("0x" + credential_hash(credential))
+            if registered_hash != presented_hash:
+                return False, "CREDENTIAL_HASH_MISMATCH", checked_block
         credential_ids = [bytes32_id(item.jti) for item in credentials]
         edge_ids = [edge_id(item.parent_did, item.child_did) for item in credentials]
         node_ids = [bytes32_id(item.child_did) for item in credentials]
         active, reason, block_number = self.contract.functions.getValidationState(
             bytes32_id(epoch.root_did), epoch.epoch, credential_ids, edge_ids, node_ids
-        ).call(block_identifier="latest")
+        ).call(block_identifier=checked_block)
         reason_text = bytes(reason).rstrip(b"\0").decode("ascii", errors="replace")
         return bool(active), reason_text or "chain state active", int(block_number)
 

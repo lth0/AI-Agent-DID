@@ -1,4 +1,4 @@
-# AgentDID 三方案、63 项独立安全实验：逐步学习与改造手册
+# AgentDID 三方案、63 项独立鲁棒性实验：逐步学习与改造手册
 
 ## 1. 文档用途
 
@@ -6,32 +6,115 @@
 
 本文是执行清单，不是最终完成报告。下表记录当前已复核状态；其余步骤仍按待执行处理。即使仓库中已经存在同名文件或部分实现，也必须按该步骤的验证命令重新核验，不能仅凭文件存在就标记完成。
 
-第一里程碑明确命名为：**三方案协议与适配器**。该里程碑只在步骤 007 至步骤 039 的代码、链上解析接线、在线入口接线与测试全部通过后完成。当前已完成三方案核心、本地 Hardhat DID 注册与真实解析，以及代表性链上实验；在线入口和完整 63 项执行仍待后续步骤验收。
+第一里程碑明确命名为：**三方案协议与适配器**。该里程碑只在步骤 007 至步骤 039 的代码、链上解析接线、在线入口接线与测试全部通过后完成。当前已完成三方案核心、本地 Hardhat DID 注册与真实解析、统一入口和本地完整 63 项执行；在线入口与 Sepolia 完整验收仍待后续步骤完成。
 
-## 当前执行状态（2026-07-20）
+## 当前执行状态（2026-07-21）
 
 | 范围 | 当前状态 | 当前证据或缺口 |
 |---|---|---|
 | 共享内存 DID/VC/VP 协议核心 | 已完成并复核 | infrastructure/agentdid_protocol.py；14 个 unittest 通过 |
 | 三个显式 Adapter | 已完成并复核 | Original、Baseline、Lineage 三个正式 Adapter；7 个 unittest 通过 |
-| A04 真实独立能力评测 | 已完成并复核 | integer-addition-v1 实际执行 100 个确定性样例，再与能力 VC 交叉核验 |
-| A05 当前状态策略 | 已完成并复核 | 有效签名状态与真实工件摘要不一致时由 Baseline 层拒绝 |
-| A06 上下文连续性策略 | 已完成并复核 | 有效签名的新快照若重置哈希或版本，由 Baseline 层拒绝 |
-| L01-L14 同语义控制场景 | 已完成无链版本并复核 | 21 场景均生成签名控制材料；4 个场景 unittest 通过；尚未接真实 Lineage 链执行 |
+| A04 能力证据鲁棒性检查 | 已完成并复核 | integer-addition-v1 实际执行 100 个确定性样例，再与能力 VC 交叉核验 |
+| A05 状态工件鲁棒性检查 | 已完成并复核 | 有效签名状态与真实工件摘要不一致时由 Baseline 层拒绝 |
+| A06 上下文连续性鲁棒性检查 | 已完成并复核 | 有效签名的新快照若重置哈希或版本，由 Baseline 层拒绝 |
+| A01-A06 三方案鲁棒性检测 | 已完成并复核 | 18 个独立子进程全部 COMPLETED，0 INFRA_ERROR，18 个 Merkle 锚定均通过；结果见 robustness-a01-a06-6e4c19b7 |
+| L01-L05 三方案谱系鲁棒性检测 | 已完成并复核 | 15 个独立子进程全部 COMPLETED，0 INFRA_ERROR，15 个 Merkle 锚定均通过；结果见 lineage-robustness-l01-l05-2a4d9f71 |
+| L06-L14 三方案谱系鲁棒性检测 | 已完成并复核 | 27 个独立子进程全部 COMPLETED，0 INFRA_ERROR，27 个 Merkle 锚定均通过；结果见 lineage-robustness-l06-l14-7c91e4b2 |
 | 证据哈希链与 Merkle 路径绑定 | 已完成并复核 | 2 个 unittest 验证 audit 前序哈希链，以及文件路径和内容共同进入 Merkle 叶子 |
 | Hardhat DID 链上注册与解析 | 已完成并复核 | 通过 did-resolver 与 ethr-did-resolver 解析链上注册和 delegate；1 个真实 Hardhat 集成测试通过 |
-| 当前新增测试合计 | 已完成并复核 | 协议 14 + Adapter 7 + 场景 4 + 证据 2 + Hardhat DID 1 = 28，目标 Conda 环境中 Ran 28 tests，OK |
+| 谱系鲁棒性与兼容性回归测试 | 已完成并复核 | security_comparison 67/67、既有 Lineage Python 23/23，全部 OK |
 | 代表性三方案端到端实验 | 已完成并复核 | H00、A02、A04、L01 × 3 方案共 12 项；均为 COMPLETED，预期判定一致，12 个独立 Merkle 根与 12 次 Hardhat 锚定均可反向核验 |
 | Sepolia DID 链上注册与解析 | 待完成 | Registry 预检、解析和禁止回退尚待接线 |
 | 在线 /auth、/probe、/context_hash 接线 | 待完成 | 当前三方案核心尚未完整接入在线演示入口 |
-| run_all 与 63 个独立子进程 | 待完成 | 尚未形成可验收的 21 × 3 独立进程运行 |
-| 63 个独立 Merkle 根与链上锚定 | 待完成 | 代表性 12 项已锚定；完整矩阵尚缺其余 51 项 |
+| 根目录统一 `main.py` 入口 | 已完成并复核 | 支持 `single`、`all`、`list`；方案全名/短名和大小写 case 均统一校验 |
+| run_all 与 63 个独立子进程 | 已完成并复核 | `main-full-63-1b7c9e`：一次 Hardhat 部署、63 个串行独立子进程、63/63 COMPLETED、0 INFRA_ERROR |
+| 63 个独立 Merkle 根与链上锚定 | 本地已完成并复核 | `main-full-63-1b7c9e`：63 个唯一 Merkle 根、63 个唯一锚定交易，全部在共享链关闭前再次反向验证 |
 | 第一里程碑“三方案协议与适配器” | **尚未完整验收** | 三方案核心、本地链 DID 解析和代表性端到端链路已完成；在线入口、Sepolia 与步骤 039 全量门槛仍未通过 |
 
-当前 28 个新增测试的 PowerShell 复核命令为：
+### A01-A06 鲁棒性检查运行入口
 
-    conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_agentdid_protocol _experiments.security_comparison.test_three_schemes _experiments.security_comparison.test_scenarios _experiments.security_comparison.test_evidence
-    conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_hardhat_did_resolution
+以下命令启动一个共享 Hardhat 节点，并以 18 个独立 Python 子进程串行运行六个鲁棒性检查的三个方案实例：
+
+```powershell
+conda run -n agentdid python -B -m _experiments.security_comparison.run_robustness
+```
+
+运行结果生成 `robustness-summary.json`、`robustness-decisions.csv` 与 `robustness-integrity.json`。A01-A06 不计入 PESR；完整性门槛为 18 项 COMPLETED、0 INFRA_ERROR、18 项响应符合预期、18 个证据锚定可反向验证且隔离检查通过。
+
+---
+
+### L01-L05 Agent 谱系鲁棒性检查运行入口
+
+以下命令启动一个共享 Hardhat 节点，并以 15 个独立 Python 子进程串行运行五个谱系鲁棒性检查的三个方案实例：
+
+```powershell
+conda run -n agentdid python -B -m _experiments.security_comparison.run_lineage_robustness
+```
+
+运行结果生成 `lineage-robustness-summary.json`、`lineage-robustness-decisions.csv` 与 `lineage-robustness-integrity.json`。L01-L05 不计入 PESR；完整性门槛为 15 项 COMPLETED、0 INFRA_ERROR、15 项响应符合预期、15 个锚定可反向验证、所有隔离字段唯一，并且 Lineage 实例只在目标谱系规则处给出预期响应。
+
+---
+
+### L06-L14 Agent 谱系鲁棒性检查运行入口
+
+以下命令复用同一入口的第二阶段，启动共享 Hardhat 节点并串行执行 27 个独立子进程：
+
+```powershell
+conda run -n agentdid python -B -m _experiments.security_comparison.run_lineage_robustness --phase 2
+```
+
+运行结果生成 `lineage-robustness-l06-l14-summary.json`、`lineage-robustness-l06-l14-decisions.csv` 与 `lineage-robustness-l06-l14-integrity.json`。本组明确设置 `excluded_from_pesr=true`；完整性门槛还要求 L09 两条分支均真实注册、L12 撤销事件与祖先 DID 匹配、所有请求签名控制通过，并且无 Invocation 预算事件。
+
+本次正式实跑使用 `run_id=lineage-robustness-l06-l14-7c91e4b2`，实际响应如下：
+
+| 检查 | Original | Baseline | Lineage | Lineage 稳定响应码 |
+|---|---:|---:|---:|---|
+| L06 Session 不可委托性 | 接受 | 接受 | 拒绝 | `IDENTITY_POLICY_INVALID` |
+| L07 委托密钥用途隔离 | 接受 | 接受 | 拒绝 | `DELEGATION_SIGNATURE_INVALID` |
+| L08 叶凭证绑定 | 接受 | 接受 | 拒绝 | `LEAF_BINDING_MISMATCH` |
+| L09 分支连续性 | 接受 | 接受 | 拒绝 | `PARENT_MISMATCH` |
+| L10 任务作用域 | 接受 | 接受 | 拒绝 | `PERMISSION_DENIED` |
+| L11 Lineage 受众绑定 | 接受 | 接受 | 拒绝 | `AUDIENCE_MISMATCH` |
+| L12 祖先撤销传播 | 接受 | 接受 | 拒绝 | `STATUS_REVOKED` |
+| L13 调用来源绑定 | 接受 | 接受 | 拒绝 | `ORIGIN_MISMATCH` |
+| L14 版本绑定 | 接受 | 接受 | 拒绝 | `VERSION_MISMATCH` |
+
+实跑共完成 27/27 个实例，0 `INFRA_ERROR`，27/27 个锚定可验证，响应符合率为 27/27。准备阶段共产生 59 笔 Lineage 交易和 59 个事件，Lineage Gas 为 11,737,703，审计锚定 Gas 为 620,880；L09 单项注册两条完整分支并产生 10 笔交易，L12 单项产生 7 笔交易且包含匹配 persistent DID 的 `StatusRevoked(kind=3)`。全部 Lineage 目标拒绝都发生在 Invocation 开始前。
+
+---
+
+当前完整回归的 PowerShell 复核命令为：
+
+    conda run -n agentdid python -B -m unittest discover -s _experiments/security_comparison -p test_*.py -v
+    conda run -n agentdid python -B -m unittest discover -s _experiments/lineage -p test_*.py -v
+
+### 根目录统一入口
+
+列出三个方案和 21 个案例：
+
+```powershell
+conda run -n agentdid python -B main.py list
+```
+
+运行单实例：
+
+```powershell
+conda run -n agentdid python -B main.py single --scheme baseline --case A04
+conda run -n agentdid python -B main.py single --scheme Lineage-AgentDID --case L12
+```
+
+预览或执行完整 63 项：
+
+```powershell
+conda run -n agentdid python -B main.py all --dry-run
+conda run -n agentdid python -B main.py all
+```
+
+`run-id` 必须是单个安全路径组件，不能包含斜杠、反斜杠或路径穿越符号；独立 Hardhat single 必须使用新的 run-id，避免把旧链的 DID setup 误用于新链。当前完整 Sepolia 入口会以 `SEPOLIA_FULL_PREFLIGHT_INCOMPLETE` 失败关闭，且不会回退 Hardhat；只有余额、relayer、Lineage Registry 和 Gas 预算预检全部实现后才开放远程 63 项执行。
+
+本地完整实跑 `run_id=main-full-63-1b7c9e` 的结果为：63/63 完成、63/63 响应符合预期、0 `INFRA_ERROR`、63/63 锚定反向验证通过、隔离检查通过、21 个场景语义摘要互异且每个场景在三方案间一致。Lineage 实际产生 133 笔业务交易与 133 个事件，Lineage Gas 为 26,144,693，审计锚定 Gas 为 1,448,730；总运行时间约 188.05 秒。
+
+---
 
 ## 2. 全程不可破坏的约束
 
@@ -39,23 +122,24 @@
 2. Shared-Root、ACL、OpenFGA、Plain-Delegation 可以保留作历史代码或兼容入口，但不得进入正式 63 项结果。
 3. 三个方案必须先运行完全相同的 DID/VC/VP 协议验证，然后才进入各自策略层。
 4. A01 至 A03 必须在共享协议层拒绝；A04 至 A06 必须保持密码学有效，只由 Baseline 及 Lineage 的严格语义层拒绝。
-5. L01 至 L14 必须保持 DID、VC、VP 与 Baseline 宽权限策略有效，只由 Lineage 层拒绝。
+5. L01 至 L14 全部是 Agent 谱系鲁棒性检查，必须保持 DID、VC、VP 与 Baseline 宽权限策略有效，只由 Lineage 层给出预期拒绝响应。
 6. 每项实验必须由独立子进程运行，并拥有独立 nonce、VC ID、VP、ReplayGuard、上下文、请求哈希、Lineage 子密钥、credential JTI、epoch 和预算 ID。
-7. 每项实验无论接受还是安全拒绝，都必须生成完整链下证据、独立 Merkle 根，并完成一次链上锚定。
-8. INFRA_ERROR 只表示基础设施失败，不能当作攻击被阻止，也不能计入 PESR 分母。
+7. 每项实验无论接受还是策略拒绝，都必须生成完整链下证据、独立 Merkle 根，并完成一次链上锚定。
+8. INFRA_ERROR 只表示基础设施失败，不能当作鲁棒性检查通过；本套场景不计算 PESR。
 9. 本地模式只使用 Hardhat；Sepolia 模式禁止自动回退本地链。
-10. 任何结果、PESR、HAR、延迟、Gas 或交易数量都必须由实际输出计算，不能在运行时代码中硬编码。
+10. 任何响应符合率、HAR、延迟、Gas 或交易数量都必须由实际输出计算，不能在运行时代码中硬编码。
 
 ## 3. 固定预期向量
 
 | 场景组 | Original-AgentDID | Baseline-AgentDID | Lineage-AgentDID |
 |---|---:|---:|---:|
 | H00 合法请求 | 接受 | 接受 | 接受 |
-| A01-A03 身份或重放攻击 | 拒绝 | 拒绝 | 拒绝 |
-| A04-A06 语义、状态或上下文攻击 | 接受 | 拒绝 | 拒绝 |
-| L01-L14 谱系攻击 | 接受 | 接受 | 拒绝 |
+| A01-A03 身份绑定与 VP 新鲜度鲁棒性检查 | 拒绝 | 拒绝 | 拒绝 |
+| A04-A06 能力、状态与上下文鲁棒性检查 | 接受 | 拒绝 | 拒绝 |
+| L01-L05 Agent 谱系鲁棒性检查 | 接受 | 接受 | 拒绝 |
+| L06-L14 Agent 谱系鲁棒性检查 | 接受 | 接受 | 拒绝 |
 
-攻击总数为 20，不包含 H00。若 20 个攻击均完成且无 INFRA_ERROR，预期攻击接受数分别为 17、14、0，因此预期 PESR 分别为 17/20、14/20、0/20。预期值只用于测试断言和最终对照，实际汇总必须读取 decision.json 计算。
+A01-A06 与 L01-L14 共 20 个 Agent 鲁棒性检查，全部不计入 PESR；本套 21 场景的 PESR 标记为 `N/A`。正式指标改为响应符合率、首个响应层分布和方案能力边界接受数，且必须从实际 `decision.json` 计算。
 
 ## 4. 每步执行方式
 
@@ -106,7 +190,7 @@
 
 - **学习目标**：理解“方案”“场景”“实验”三个层级，避免把 21 场景误写成 63 个共享状态分支。
 - **本步只修改**：_experiments/security_comparison/cases.py。
-- **具体改动**：定义三个稳定方案键 original、baseline、lineage；定义显示名称；定义 H00、A01-A06、L01-L14；为每个 CaseSpec 记录 family、attack_name、说明与预期检测层。
+- **具体改动**：定义三个稳定方案键 original、baseline、lineage；定义显示名称；定义 H00、A01-A06、L01-L14；为每个 CaseSpec 记录 family、check_name、说明与预期检测层。
 - **验证命令**：
 
       conda run -n agentdid python -B -c "from _experiments.security_comparison.cases import CASES, SCHEMES; print(len(CASES), len(SCHEMES), len(CASES)*len(SCHEMES))"
@@ -304,14 +388,14 @@
 
 ### 步骤 017：加入 credential subject 与 holder 绑定
 
-- **学习目标**：理解 A03 的核心是受害者 VC 被攻击者放入自己的 VP，而不是 VC 签名被破坏。
+- **学习目标**：理解 A03 的核心是一个 Holder 的 VC 被另一个测试 Holder 放入自己的 VP，而不是 VC 签名被破坏。
 - **本步只修改**：infrastructure/agentdid_protocol.py。
 - **具体改动**：对每个 VC 检查 credentialSubject.id 等于 VP holder；若协议允许多 subject，则显式定义唯一目标 subject 规则；拒绝跨持有者 VC。
 - **验证命令**：
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_subject_holder_binding
 
-- **预期结果**：受害者 VC 在受害者 VP 中通过，在攻击者 VP 中以稳定错误码拒绝。
+- **预期结果**：原 Holder 的 VC 在自己的 VP 中通过，在另一个测试 Holder 的 VP 中以稳定错误码拒绝。
 - **完成条件**：A03 不依赖重复 VC 或篡改签名即可被检出。
 
 ---
@@ -374,14 +458,14 @@
 
 ### 步骤 022：验证 VP holder 与 authentication
 
-- **学习目标**：理解 A01 是攻击者用自己的密钥声称受害者 DID，数学签名可有效但 DID relationship 无效。
+- **学习目标**：理解 A01 使用无关测试密钥声明目标 DID，数学签名可有效但 DID relationship 无效。
 - **本步只修改**：infrastructure/agentdid_protocol.py。
 - **具体改动**：恢复 VP 签名地址；校验 verificationMethod 属于 holder DID 且被列入 authentication；校验外部 expected_holder；禁止仅凭 recovered address 接受。
 - **验证命令**：
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_vp_holder_authentication
 
-- **预期结果**：受害者 holder 加攻击者签名被拒绝；合法 holder operation key 通过。
+- **预期结果**：目标 holder 加无关测试密钥签名被拒绝；合法 holder operation key 通过。
 - **完成条件**：A01 以 DID_AUTHENTICATION_MISMATCH 或等价稳定码失败。
 
 ---
@@ -466,7 +550,7 @@
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_bundle_factory
 
 - **预期结果**：重复创建同一 case 的两个 bundle 时所有要求独立的标识均不同，协议语义字段一致。
-- **完成条件**：场景变异器只修改攻击所需字段，不重新实现正常材料生成。
+- **完成条件**：场景变异器只修改鲁棒性检查所需字段，不重新实现正常材料生成。
 
 ---
 
@@ -522,7 +606,7 @@
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_state_cross_check
 
 - **预期结果**：真实声明通过；有效签名的虚假摘要返回 STATE_GROUND_TRUTH_MISMATCH。
-- **完成条件**：真实工件摘要不能取自攻击者提供的状态声明。
+- **完成条件**：真实工件摘要不能取自待检查的签名状态声明。
 
 ---
 
@@ -578,7 +662,7 @@
       conda run -n agentdid python -B -m unittest discover -s _experiments/lineage -p "test_*.py" -v
 
 - **预期结果**：四类撤销均能独立阻止对应链，未撤销链继续通过。
-- **完成条件**：L12 可选择祖先撤销构造攻击，且不是由 Baseline 提前拒绝。
+- **完成条件**：L12 可选择祖先撤销构造鲁棒性变体，且不是由 Baseline 提前拒绝。
 
 ---
 
@@ -598,14 +682,14 @@
 
 ### 步骤 038：锁定三适配器分层不变量
 
-- **学习目标**：理解同一攻击可能被多个层发现，但实验必须控制首个目标检测层。
+- **学习目标**：理解同一异常变体可能被多个层发现，但实验必须控制首个目标响应层。
 - **本步只修改**：_experiments/security_comparison/tests/test_adapter_layering.py。
 - **具体改动**：为 A01-A03 断言三方案首个失败层为共享协议；A04-A06 断言共享协议通过且 Baseline/Lineage 在 Baseline 层失败；L01-L14 断言共享协议与 Baseline 全通过。
 - **验证命令**：
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_adapter_layering
 
-- **预期结果**：所有非目标验证层均按设计通过，不出现“攻击被错误低层提前拒绝”。
+- **预期结果**：所有非目标验证层均按设计通过，不出现“鲁棒性变体被错误低层提前拒绝”。
 - **完成条件**：测试失败时输出 case、scheme、预期层、实际层和首个错误码。
 
 ---
@@ -624,7 +708,7 @@
 
 ---
 
-## 阶段 2：逐个构造 21 个安全场景
+## 阶段 2：逐个构造 21 个鲁棒性与合法控制场景
 
 ### 步骤 040：把预期向量写成独立测试数据
 
@@ -635,14 +719,14 @@
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_expected_vectors
 
-- **预期结果**：预期向量恰好 63 项，三个 H00 接受，攻击接受数为 17、14、0。
+- **预期结果**：预期向量恰好 63 项，三个 H00 接受；A01-A06 与 L01-L14 共 20 个鲁棒性案例均按各自响应向量通过；PESR 标记为 N/A。
 - **完成条件**：运行时代码不导入 expected_vectors，只有测试与最终对照报告使用它。
 
 ---
 
 ### 步骤 041：实现 H00 合法请求
 
-- **学习目标**：理解每类攻击都应从同一个可通过的合法控制样本变异而来。
+- **学习目标**：理解每类鲁棒性检查都应从同一个可通过的合法控制样本变异而来。
 - **本步只修改**：_experiments/security_comparison/case_builders.py 或现有 bundle 工厂。
 - **具体改动**：生成合法 DID、五类 VC、未撤销状态、VP、能力证据、真实状态、连续 Context、合法两级 Lineage 委托、足够预算和唯一请求；Original 只消费最小子集。
 - **验证命令**：
@@ -650,15 +734,15 @@
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_cases
 
 - **预期结果**：H00 在三个方案均接受，所有应执行层的 trace 都为通过。
-- **完成条件**：H00 失败时后续攻击步骤全部暂停，因为攻击变异没有可靠控制样本。
+- **完成条件**：H00 失败时后续鲁棒性步骤全部暂停，因为场景变异没有可靠控制样本。
 
 ---
 
-### 步骤 042：实现 A01 攻击者密钥声明受害者 DID
+### 步骤 042：实现 A01 DID 与认证密钥绑定鲁棒性检查
 
 - **学习目标**：学习区分 DID 字符串声明与 DID authentication 授权。
 - **本步只修改**：_experiments/security_comparison/case_builders.py 中 A01 变异器及对应测试。
-- **具体改动**：保留 VP holder 为受害者 DID；改用攻击者操作私钥签 VP；不篡改其他 VC、challenge 或 audience；记录攻击者与受害者公开地址摘要。
+- **具体改动**：保留 VP holder 为目标 DID；改用无关测试身份的操作私钥签 VP；不改变其他 VC、challenge 或 audience；记录两个公开地址摘要。
 - **验证命令**：
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_cases
@@ -668,7 +752,7 @@
 
 ---
 
-### 步骤 043：实现 A02 在新 challenge 下重放旧 VP
+### 步骤 043：实现 A02 VP challenge 新鲜度鲁棒性检查
 
 - **学习目标**：学习会话 challenge 如何阻止完整旧证明重放。
 - **本步只修改**：A02 变异器及对应测试。
@@ -682,21 +766,21 @@
 
 ---
 
-### 步骤 044：实现 A03 攻击者 VP 携带受害者 VC
+### 步骤 044：实现 A03 VC subject-holder 绑定鲁棒性检查
 
 - **学习目标**：学习 credential subject-holder binding 阻止凭证借用。
 - **本步只修改**：A03 变异器及对应测试。
-- **具体改动**：由可信 Issuer 给受害者签发合法 VC；攻击者用自己的 DID 和 authentication key 创建全新合法 VP；把受害者 VC 放入该 VP；challenge 和 audience 保持正确。
+- **具体改动**：由可信 Issuer 给目标 Holder 签发合法 VC；另一个测试 Holder 用自己的 DID 和 authentication key 创建全新合法 VP；把前者 VC 放入该 VP；challenge 和 audience 保持正确。
 - **验证命令**：
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_cases
 
 - **预期结果**：三方案均因 VC subject 与 VP holder 不一致在共享协议层拒绝。
-- **完成条件**：攻击者 VP 签名有效、受害者 VC 签名有效，唯一目标失败是 holder binding。
+- **完成条件**：测试 Holder 的 VP 签名有效、原 VC 签名有效，唯一目标失败是 holder binding。
 
 ---
 
-### 步骤 045：实现 A04 可信 Issuer 签发虚假能力
+### 步骤 045：实现 A04 能力声明与独立证据一致性检查
 
 - **学习目标**：学习密码学真实性与声明语义真实性的区别。
 - **本步只修改**：A04 变异器、能力评测 fixture 与对应测试。
@@ -710,7 +794,7 @@
 
 ---
 
-### 步骤 046：实现 A05 Holder 有效签名虚假当前状态
+### 步骤 046：实现 A05 签名状态与真实工件一致性检查
 
 - **学习目标**：学习 signed state 只能证明“holder 说过”，不能证明工件真的处于该状态。
 - **本步只修改**：A05 变异器、真实工件 fixture 与对应测试。
@@ -724,11 +808,11 @@
 
 ---
 
-### 步骤 047：实现 A06 认证后重置上下文
+### 步骤 047：实现 A06 上下文连续性鲁棒性检查
 
 - **学习目标**：学习有效签名的全新快照仍可能破坏会话连续性。
 - **本步只修改**：A06 变异器、上下文 fixture 与对应测试。
-- **具体改动**：验证端保存版本 1 的认证上下文；正常下一状态应为版本 2；攻击者清空消息并签署版本 1 的新快照；签名、holder、audience 与时间均合法。
+- **具体改动**：验证端保存版本 1 的认证上下文；正常下一状态应为版本 2；测试输入清空消息并签署版本 1 的新快照；签名、holder、audience 与时间均合法。
 - **验证命令**：
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_cases
@@ -738,212 +822,212 @@
 
 ---
 
-### 步骤 048：建立 Lineage 攻击共用合法宽权限夹具
+### 步骤 048：建立 Lineage 鲁棒性检查共用合法宽权限夹具
 
-- **学习目标**：理解 14 个 Lineage 攻击必须避免被共享协议或 Baseline 策略提前拒绝。
+- **学习目标**：理解 14 个 Lineage 鲁棒性变体必须避免被共享协议或 Baseline 策略提前拒绝。
 - **本步只修改**：_experiments/security_comparison/lineage_cases.py 的共同构造器。
 - **具体改动**：创建 Root → Persistent → Session 合法链；为 Baseline 提供覆盖所有测试 action、resource、task、audience、version 的宽权限控制策略；为每次实验创建独立 epoch、JTI、budget 和子密钥。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_case_base
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase1 _experiments.security_comparison.test_lineage_phase2
 
 - **预期结果**：未变异的基础链通过 shared protocol、Baseline 和 Lineage；各独立标识均非空。
 - **完成条件**：后续 L01-L14 只通过小型变异函数改变一个目标约束。
 
 ---
 
-### 步骤 049：实现 L01 action 越权
+### 步骤 049：实现 L01 action 范围鲁棒性检查
 
 - **学习目标**：学习调用权限必须是委托 action 集合的子集。
 - **本步只修改**：lineage_cases.py 中 L01 变异器与测试。
 - **具体改动**：leaf 委托只允许 read；调用改为 write 并由合法 leaf operation key 重新签名；Baseline 宽策略同时允许 read 与 write。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase1
 
 - **预期结果**：Original、Baseline 接受，Lineage 以 action scope 错误码拒绝。
 - **完成条件**：共享协议和 Baseline trace 全通过，Lineage 是首个失败层。
 
 ---
 
-### 步骤 050：实现 L02 resource 越权
+### 步骤 050：实现 L02 resource 范围鲁棒性检查
 
 - **学习目标**：学习 action 合法不代表目标 resource 自动合法。
 - **本步只修改**：L02 变异器与测试。
 - **具体改动**：leaf 只被委托 urn:tool:a；调用改为 urn:tool:b 并重签；Baseline 宽策略允许两个 resource。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase1
 
 - **预期结果**：Original、Baseline 接受，Lineage 在 resource scope 拒绝。
 - **完成条件**：除 resource 外的 action、task、audience、version 和签名全部保持合法。
 
 ---
 
-### 步骤 051：实现 L03 委托范围扩大
+### 步骤 051：实现 L03 委托范围收缩鲁棒性检查
 
 - **学习目标**：学习子委托权限必须单调收缩。
 - **本步只修改**：L03 变异器与测试。
 - **具体改动**：重建并合法签署子委托，使其新增父委托未授权的 action 或 resource；调用使用被扩大的权限；保留父引用和其余链结构。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase1
 
 - **预期结果**：Original、Baseline 接受，Lineage 因 attenuation violation 拒绝。
 - **完成条件**：子委托签名本身有效，不能用无效签名替代范围检查。
 
 ---
 
-### 步骤 052：实现 L04 有效期延长
+### 步骤 052：实现 L04 有效期衰减鲁棒性检查
 
 - **学习目标**：学习子委托有效期不得超出父委托。
 - **本步只修改**：L04 变异器与测试。
 - **具体改动**：把子委托 expires_at 设置为父委托 expires_at 之后，并由合法委托密钥重签；当前调用时间仍在两者时间窗内，避免简单过期检查提前失败。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase1
 
 - **预期结果**：Original、Baseline 接受，Lineage 因 validity attenuation 拒绝。
 - **完成条件**：拒绝理由是“子窗超出父窗”，而不是“当前凭证已过期”。
 
 ---
 
-### 步骤 053：实现 L05 深度重置
+### 步骤 053：实现 L05 委托深度衰减鲁棒性检查
 
 - **学习目标**：学习 remaining_depth 必须沿委托链递减。
 - **本步只修改**：L05 变异器与测试。
 - **具体改动**：把子委托 remaining_depth 提高或重置到父级数值；使用合法委托密钥重签；不改变 delegable 等其他字段。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase1
 
 - **预期结果**：Original、Baseline 接受，Lineage 因 depth attenuation 拒绝。
 - **完成条件**：测试能显示父深度、期望最大子深度与实际子深度。
 
 ---
 
-### 步骤 054：实现 L06 禁止委托绕过
+### 步骤 054：实现 L06 Session 不可委托性鲁棒性检查
 
-- **学习目标**：学习 delegable=false 与 remaining_depth=0 是需要共同执行的禁止条件。
+- **学习目标**：学习 `delegable=false` 与 `remaining_depth=0` 是需要共同执行的 Session 终止条件。
 - **本步只修改**：L06 变异器与测试。
-- **具体改动**：从不可继续委托的 Session 凭证构造下一层或伪造可委托子凭证；用当前持有的合法密钥签署可签部分；Baseline 不解释该谱系字段。
+- **具体改动**：从不可继续委托的 Session 凭证构造下一层，并用当前持有的合法密钥签署可签部分；Baseline 不解释该谱系字段。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase2
 
-- **预期结果**：Original、Baseline 接受，Lineage 因 forbidden delegation 拒绝。
+- **预期结果**：Original、Baseline 接受，Lineage 以 `IDENTITY_POLICY_INVALID` 拒绝，且不开始预算调用。
 - **完成条件**：拒绝不是来自普通 VP holder 或 VC subject 不一致。
 
 ---
 
-### 步骤 055：实现 L07 operation key 签委托
+### 步骤 055：实现 L07 委托密钥用途隔离鲁棒性检查
 
-- **学习目标**：学习 operation key 与 delegation key 的权限分离。
+- **学习目标**：学习 operation key 与 delegation key 的用途分离。
 - **本步只修改**：L07 变异器与测试。
-- **具体改动**：保持委托内容合法，但用父代理的 operation private key 替代 delegation private key 签署子委托；调用仍由 leaf operation key 合法签署。
+- **具体改动**：保持委托内容合法，用父代理的 operation private key 替代 delegation private key 签署子委托；调用仍由 leaf operation key 合法签署。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase2
 
-- **预期结果**：Original、Baseline 接受，Lineage 以 delegation signer relationship 错误拒绝。
+- **预期结果**：Original、Baseline 接受，Lineage 以 `DELEGATION_SIGNATURE_INVALID` 拒绝，且不开始预算调用。
 - **完成条件**：测试证明错误密钥属于同一代理但用途不被授权。
 
 ---
 
-### 步骤 056：实现 L08 兄弟凭证冒充
+### 步骤 056：实现 L08 叶凭证绑定鲁棒性检查
 
-- **学习目标**：学习同一父节点下的 sibling 不能互用 credential。
+- **学习目标**：学习同一父节点下的 sibling 不能互用 credential、JTI 或 operation key。
 - **本步只修改**：L08 变异器与测试。
 - **具体改动**：创建两个合法 sibling；由 sibling-B 的 operation key 签调用，但引用 sibling-A 的 credential JTI 或权限；VP holder 与调用者保持一致以通过共享协议。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase2
 
-- **预期结果**：Original、Baseline 接受，Lineage 因 leaf/JTI/operation key 绑定不一致拒绝。
+- **预期结果**：Original、Baseline 接受，Lineage 以 `LEAF_BINDING_MISMATCH` 拒绝；只允许一次只读链状态核验，不开始预算调用。
 - **完成条件**：两个 sibling 自身 DID、密钥和凭证都各自合法。
 
 ---
 
-### 步骤 057：实现 L09 分支拼接
+### 步骤 057：实现 L09 分支连续性鲁棒性检查
 
 - **学习目标**：学习每个子凭证必须链接到实际父凭证与 lineage commitment。
 - **本步只修改**：L09 变异器与测试。
-- **具体改动**：创建两条各自合法的委托分支；把分支 A 的上层与分支 B 的叶凭证拼接；保持各单份凭证签名有效。
+- **具体改动**：在链上注册两条各自合法且预算独立的完整委托分支；把分支 A 的上层与分支 B 的叶凭证组合；保持各单份凭证签名有效。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase2
 
-- **预期结果**：Original、Baseline 接受，Lineage 因 parent credential hash 或 lineage commitment 不连续拒绝。
+- **预期结果**：Original、Baseline 接受，Lineage 以 `PARENT_MISMATCH` 拒绝；准备阶段产生 10 笔 Lineage 交易和 10 个事件，不开始预算调用。
 - **完成条件**：测试分别证明两条原始完整链可通过，而拼接链被拒绝。
 
 ---
 
-### 步骤 058：实现 L10 跨任务重放
+### 步骤 058：实现 L10 任务作用域鲁棒性检查
 
 - **学习目标**：学习 task_id 是委托权限和调用签名的一部分。
 - **本步只修改**：L10 变异器与测试。
 - **具体改动**：leaf 仅获 task-1；调用改为 task-2 并由合法 leaf key 重签；Baseline 宽策略允许两个 task。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase2
 
-- **预期结果**：Original、Baseline 接受，Lineage 因 task scope 拒绝。
+- **预期结果**：Original、Baseline 接受，Lineage 以 `PERMISSION_DENIED` 拒绝；只允许一次只读链状态核验，不开始预算调用。
 - **完成条件**：请求正文、action、resource 和 audience 保持不变。
 
 ---
 
-### 步骤 059：实现 L11 跨受众重放
+### 步骤 059：实现 L11 Lineage 受众绑定鲁棒性检查
 
-- **学习目标**：学习 VP audience 合法不代表 Lineage 委托也授权该受众。
+- **学习目标**：学习共享协议的 VP audience 合法不代表 Lineage 调用 audience 也处于委托范围内。
 - **本步只修改**：L11 变异器与测试。
-- **具体改动**：为新的协议 audience 创建全新合法 VP，确保共享协议 expected_audience 同步；调用与 VP 均绑定 other gateway；委托只授权正式 Lineage gateway。
+- **具体改动**：VP、状态声明和上下文均继续绑定正式协议 audience；仅把已重新签名的 Lineage 调用 audience 改为 other gateway；委托只授权正式 Lineage gateway。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase2
 
-- **预期结果**：Original、Baseline 接受，Lineage 因委托 audience scope 拒绝。
-- **完成条件**：共享 VP audience 检查通过，不能让 L11 退化为 A02 类低层失败。
+- **预期结果**：Original、Baseline 接受，Lineage 以 `AUDIENCE_MISMATCH` 拒绝，且不开始预算调用。
+- **完成条件**：共享 VP、状态与上下文的 audience 检查全部通过，不能让 L11 退化为低层协议失败。
 
 ---
 
-### 步骤 060：实现 L12 祖先撤销绕过
+### 步骤 060：实现 L12 祖先撤销传播鲁棒性检查
 
 - **学习目标**：学习叶凭证未撤销也不能绕过祖先节点撤销。
 - **本步只修改**：L12 变异器与测试。
 - **具体改动**：先注册合法链，再在链上撤销 persistent 祖先；保持 leaf credential、VP 和 Baseline 状态有效；尝试使用原链调用。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase2
 
-- **预期结果**：Original、Baseline 接受，Lineage 从链上状态发现 ancestor revoked 并拒绝。
+- **预期结果**：Original、Baseline 接受，Lineage 从链上状态发现祖先撤销并以 `STATUS_REVOKED` 拒绝；准备阶段产生 7 笔 Lineage 交易和 7 个事件。
 - **完成条件**：chain-activity 可引用撤销交易与事件，拒绝不依赖内存标志。
 
 ---
 
-### 步骤 061：实现 L13 confused deputy
+### 步骤 061：实现 L13 调用来源绑定鲁棒性检查
 
 - **学习目标**：学习合法代理不能把调用来源或 on_behalf_of 关系偷换成更高权限主体。
 - **本步只修改**：L13 变异器与测试。
 - **具体改动**：由合法 leaf key 重签请求，但把 origin_did、on_behalf_of 或请求主体关系改成未被委托允许的身份；其他作用域字段合法。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase2
 
-- **预期结果**：Original、Baseline 接受，Lineage 因代理主体关系不一致拒绝。
+- **预期结果**：Original、Baseline 接受，Lineage 以 `ORIGIN_MISMATCH` 拒绝，且不开始预算调用。
 - **完成条件**：签名者身份有效，但所代表的主体语义无授权。
 
 ---
 
-### 步骤 062：实现 L14 版本替换
+### 步骤 062：实现 L14 版本绑定鲁棒性检查
 
 - **学习目标**：学习 agent/version binding 防止用同一身份替换未经授权的软件版本。
 - **本步只修改**：L14 变异器与测试。
 - **具体改动**：调用声明另一个 version_id 并由合法 leaf key 重签；Baseline 的 Model VC 与宽策略允许该版本用于对照；Lineage 委托只允许原版本。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_lineage_cases
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_lineage_phase2
 
-- **预期结果**：Original、Baseline 接受，Lineage 因 version scope 拒绝。
+- **预期结果**：Original、Baseline 接受，Lineage 以 `VERSION_MISMATCH` 拒绝，且不开始预算调用。
 - **完成条件**：共享协议和 Baseline 版本检查均有明确通过证据。
 
 ---
@@ -952,12 +1036,12 @@
 
 - **学习目标**：学习安全实验的关键不是“发生拒绝”，而是“在预定机制处发生拒绝”。
 - **本步只修改**：_experiments/security_comparison/tests/test_case_layer_invariants.py。
-- **具体改动**：遍历 H00、A01-A06、L01-L14；断言攻击只修改预定字段；检查所有非目标层通过；检查每个 case 的稳定错误码与检测层。
+- **具体改动**：遍历 H00、A01-A06、L01-L14；断言鲁棒性变体或谱系约束变体只修改预定字段；检查所有非目标层通过；检查每个 case 的稳定错误码与检测层。
 - **验证命令**：
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_case_layer_invariants
 
-- **预期结果**：21 个场景全部满足分层不变量，且没有两个 case 意外生成相同攻击材料摘要。
+- **预期结果**：21 个场景全部满足分层不变量，且没有两个 case 意外生成相同鲁棒性材料摘要。
 - **完成条件**：可以用一张机器生成表解释每个场景“哪些层通过、首个失败层是什么”。
 
 ---
@@ -1023,11 +1107,11 @@
 ### 步骤 068：让 run_one 只执行一个方案和一个场景
 
 - **学习目标**：理解真正的独立实验入口不能在内部循环整个矩阵。
-- **本步只修改**：_experiments/security_comparison/run_one.py。
-- **具体改动**：支持 --scheme original|baseline|lineage、--case H00..L14、--run-id、--experiment-id、--config、--output-dir；单次只构造一个 bundle、调用一个适配器、锚定一次并退出。
+- **本步只修改**：_experiments/security_comparison/run_one.py 与根目录 main.py。
+- **具体改动**：支持 `main.py single --scheme original|baseline|lineage --case H00..L14`、run-id、experiment-id、chain、Lineage epoch 和输出目录；单次只构造一个 bundle、调用一个适配器、锚定一次并退出。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m _experiments.security_comparison.run_one --help
+      conda run -n agentdid python -B main.py single --help
 
 - **预期结果**：帮助信息列出单实验参数，非法 scheme/case 返回非零退出码。
 - **完成条件**：run_one 源码中不存在遍历 SCHEMES 或 CASES 的正式执行循环。
@@ -1094,12 +1178,12 @@
 
 - **学习目标**：理解矩阵编排器只负责调度和收集，不能代替子进程执行验证。
 - **本步只修改**：_experiments/security_comparison/run_all.py。
-- **具体改动**：按 SCHEMES × CASES 生成 63 个 ExperimentConfig；每项使用 Python subprocess 调用 run_one；默认顺序固定；记录 PID、开始结束时间、退出码和输出目录；链 nonce 未实现安全协调前保持串行。
+- **具体改动**：按 21 个固定 case × 3 个 scheme 生成 63 个 ExperimentConfig；每项使用 Python subprocess 调用 run_one；默认顺序固定；记录开始结束时间、耗时、退出码、日志和输出目录；共享交易账户的 nonce 保持串行。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_run_all_orchestration
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_run_all
 
-- **预期结果**：模拟执行器被调用 63 次，每次参数唯一且没有进程内 bundle 复用。
+- **预期结果**：纯计划测试得到 63 个精确组合和唯一 experiment_id/ordinal/epoch；真实 `main.py all` 创建 63 个子进程且没有进程内 bundle 复用。
 - **完成条件**：父进程源码不导入 evaluate_scheme 或具体适配器执行函数。
 
 ---
@@ -1111,7 +1195,7 @@
 - **具体改动**：单项 INFRA_ERROR 后继续调度剩余项；最终汇总列出失败；默认整体返回非零；提供 --fail-fast 仅供调试且不得用于正式验收。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_run_all_failure_policy
+      conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.test_run_all
 
 - **预期结果**：模拟第 5 项失败后仍执行其余 58 项，最终退出非零并记录第 5 项 INFRA_ERROR。
 - **完成条件**：任何缺失实验或 INFRA_ERROR 都不能生成“验收通过”标志。
@@ -1121,15 +1205,15 @@
 ### 步骤 075：支持精确调试选择但保持正式入口完整
 
 - **学习目标**：理解学习和调试需要小范围运行，但正式 run_all 不能悄悄变成抽样。
-- **本步只修改**：run_one.py、run_all.py 的 CLI 参数层。
-- **具体改动**：run_one 保持 --scheme 与 --case；run_all 正式默认始终 63 项；若提供开发过滤器必须在输出中标记 NON_ACCEPTANCE_RUN，且不能生成正式 PESR 验收结论。
+- **本步只修改**：main.py、run_one.py、run_all.py 的 CLI 参数层。
+- **具体改动**：`main.py single` 要求 scheme 与 case；`main.py all` 固定始终运行 63 项并明确拒绝 scheme/case 过滤；`--dry-run` 只展示完整计划，不生成验收结论。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m _experiments.security_comparison.run_one --scheme baseline --case A04 --help
-      conda run -n agentdid python -B -m _experiments.security_comparison.run_all --help
+      conda run -n agentdid python -B main.py single --scheme baseline --case A04
+      conda run -n agentdid python -B main.py all --dry-run
 
-- **预期结果**：单项调试命令可发现；正式完整命令无需额外参数；过滤运行有明确非验收标记。
-- **完成条件**：--sepolia 不能与任何抽样或过滤参数组合用于正式结果。
+- **预期结果**：单项调试命令精确运行一个实例；完整命令无需方案或案例参数；全量子命令传入 scheme/case 时 argparse 直接拒绝。
+- **完成条件**：Sepolia 全量入口同样不接受任何抽样或过滤参数。
 
 ---
 
@@ -1433,31 +1517,31 @@
 
 ---
 
-### 步骤 097：从实际结果计算 PESR 与 HAR
+### 步骤 097：从实际结果计算响应符合率与 HAR
 
-- **学习目标**：理解指标分母必须排除 H00 与 INFRA_ERROR，并公开计算式。
+- **学习目标**：理解鲁棒性响应指标必须排除 H00 与 INFRA_ERROR，并公开计算式。
 - **本步只修改**：summary.py。
-- **具体改动**：PESR 定义为已完成攻击中被方案接受的数量除以已完成攻击数量；正式验收要求分母为 20；HAR 定义为已完成 H00 中接受数量除以已完成 H00 数量；分别按 scheme 计算。
+- **具体改动**：A01-A06 与 L01-L14 全部作为鲁棒性检查，按 scheme 统计 `response_conformant/completed`、`accepted/completed` 与首个响应层；PESR 固定标记为 N/A；HAR 定义为已完成 H00 中接受数量除以已完成 H00 数量。
 - **验证命令**：
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_metrics
 
-- **预期结果**：固定合法 fixture 得到 17/20、14/20、0/20 和三个 HAR=1/1；插入 INFRA_ERROR 时指标标记 incomplete。
-- **完成条件**：代码中没有直接返回 17、14、0 的分支，数字只能来自行级 decision 计数。
+- **预期结果**：固定 fixture 得到每方案 20/20 响应符合预期和三个 HAR=1/1；插入 INFRA_ERROR 时对应指标标记 incomplete，PESR 始终为 N/A。
+- **完成条件**：响应符合数、接受数和首个响应层只能来自行级 decision 计数，不能硬编码。
 
 ---
 
-### 步骤 098：计算分攻击族检测率
+### 步骤 098：计算分鲁棒性族响应符合率
 
-- **学习目标**：理解总 PESR 会隐藏身份、语义和谱系三类机制的差异。
+- **学习目标**：理解总响应符合率会隐藏身份、语义和谱系三类机制的差异。
 - **本步只修改**：summary.py。
-- **具体改动**：按 identity_replay=A01-A03、semantic=A04-A06、lineage=L01-L14 分组；输出每方案 detected/completed、accepted/completed 和首个检测层分布。
+- **具体改动**：按 protocol_robustness=A01-A03、semantic_robustness=A04-A06、lineage_phase1_robustness=L01-L05、lineage_phase2_robustness=L06-L14 分组；输出每方案 response_conformant/completed、accepted/completed 和首个响应层分布。
 - **验证命令**：
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_family_metrics
 
-- **预期结果**：固定向量中三方案对 A01-A03 检测率均 3/3；Baseline/Lineage 对 A04-A06 为 3/3；只有 Lineage 对 L01-L14 为 14/14。
-- **完成条件**：INFRA_ERROR 不计作 detected，并使对应族标记覆盖不完整。
+- **预期结果**：固定向量中三方案对 A01-A03 响应符合率均为 3/3；Baseline/Lineage 对 A04-A06 为 3/3；Lineage 对 L01-L05 为 5/5，并对 L06-L14 为 9/9。
+- **完成条件**：INFRA_ERROR 不计作响应符合，并使对应族标记覆盖不完整。
 
 ---
 
@@ -1505,18 +1589,19 @@
 
 ---
 
-### 步骤 102：完善三个主 CLI
+### 步骤 102：完善根目录统一 CLI 与两个执行核心
 
 - **学习目标**：理解稳定入口是可复现实验的一部分。
-- **本步只修改**：run_all.py、run_one.py 与 _experiments/security_comparison/README.md。
-- **具体改动**：确保以下三条命令可发现、参数说明一致；run_all 默认 Hardhat 全量；--sepolia 全量且预检；run_one 支持精确调试；README 解释输出和退出码。
+- **本步只修改**：main.py、run_all.py、run_one.py 与 README.md。
+- **具体改动**：确保 `main.py list/single/all` 可发现、参数说明一致；all 默认 Hardhat 全量，single 支持精确调试；README 解释输出和退出码。
 - **验证命令**：
 
-      conda run -n agentdid python -B -m _experiments.security_comparison.run_all --help
-      conda run -n agentdid python -B -m _experiments.security_comparison.run_one --help
+      conda run -n agentdid python -B main.py --help
+      conda run -n agentdid python -B main.py single --help
+      conda run -n agentdid python -B main.py all --help
 
-- **预期结果**：帮助文本包含模式、输出目录、预检、非回退和正式验收含义。
-- **完成条件**：文档中的三条主命令与 argparse 实际行为完全一致。
+- **预期结果**：帮助文本包含模式、方案、案例、链、输出目录、超时、非回退和正式验收含义。
+- **完成条件**：文档中的 `list/single/all` 命令与 argparse 实际行为完全一致。
 
 ---
 
@@ -1544,7 +1629,7 @@
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_baseline_policy_matrix
 
 - **预期结果**：A04-A06 的合法控制与目标变异均可独立复现。
-- **完成条件**：每个语义攻击都证明共享协议有效，而非只断言最终拒绝。
+- **完成条件**：每个语义鲁棒性变体都证明共享协议有效，而非只断言最终拒绝。
 
 ---
 
@@ -1557,7 +1642,7 @@
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_63_adapter_vectors
 
-- **预期结果**：63 项全部通过；统计攻击接受数为 17、14、0，但数字由测试结果计数得到。
+- **预期结果**：63 项全部通过；20 个鲁棒性案例的响应符合率均单独统计，PESR 为 N/A，所有数字均由测试结果计数得到。
 - **完成条件**：任何单 case 失败都显示完整 case/scheme 与 trace 摘要。
 
 ---
@@ -1585,7 +1670,7 @@
 
       conda run -n agentdid python -B -m unittest -v _experiments.security_comparison.tests.test_hardhat_full_matrix
 
-- **预期结果**：本地完整矩阵一次通过；三个 H00 接受；Lineage 的 20 个攻击接受数为零。
+- **预期结果**：本地完整矩阵一次通过；三个 H00 接受；三方案对 20 个鲁棒性案例均给出预期响应，其中 Lineage 对 L01-L14 全部拒绝。
 - **完成条件**：测试必须读取真实产物和 RPC 回执，不能 mock anchor 或 Lineage Registry。
 
 ---
@@ -1624,12 +1709,12 @@
 
 - **学习目标**：理解测试夹具成功之后还要验证用户实际运行的命令。
 - **本步只修改**：只修复主入口运行发现的问题，不改变预期向量。
-- **具体改动**：执行默认 Hardhat 完整 run_all；保存 run_id；运行完整性校验和汇总；对 decisions.csv、PESR、HAR、anchor 数和 reverse verification 做最终核对。
+- **具体改动**：执行默认 Hardhat 完整 run_all；保存 run_id；运行完整性校验和汇总；对 decisions.csv、响应符合率、HAR、anchor 数和 reverse verification 做最终核对。
 - **验证命令**：
 
       conda run -n agentdid python -B -m _experiments.security_comparison.run_all
 
-- **预期结果**：63 项均 COMPLETED、0 INFRA_ERROR、3 个合法请求接受、Lineage 对 20 个攻击零接受、63 个 anchor 全部可反向验证。
+- **预期结果**：63 项均 COMPLETED、0 INFRA_ERROR、3 个合法请求接受、20 个鲁棒性案例响应符合预期、Lineage 对 L01-L14 零接受、63 个 anchor 全部可反向验证。
 - **完成条件**：run 目录内有 decisions.csv、三方案并列表、指标、延迟/Gas、integrity-report.json，且 overall_pass=true。
 
 ---
@@ -1652,7 +1737,7 @@
 
 - **学习目标**：理解“代码已修改”“测试已通过”“正式实验已执行”是三个不同结论。
 - **本步只修改**：docs 或 run 目录中的最终报告，不再改业务代码。
-- **具体改动**：按“修改文件、关键行为、兼容影响、执行命令、测试计数、run_id、63 项状态、实际向量、PESR/HAR、交易和 Gas、完整性、未完成项”顺序写报告；所有结论链接到具体产物。
+- **具体改动**：按“修改文件、关键行为、兼容影响、执行命令、测试计数、run_id、63 项状态、实际向量、响应符合率/HAR、交易和 Gas、完整性、未完成项”顺序写报告；所有结论链接到具体产物。
 - **验证命令**：
 
       conda run -n agentdid python -B -m _experiments.security_comparison.verify_run --run-id <实际 run_id>
@@ -1672,7 +1757,7 @@
 
 1. 本步新增了哪条安全不变量？
 2. 哪个最小正例证明正常行为未被破坏？
-3. 哪个最小反例证明目标攻击会被预定层检测？
+3. 哪个最小鲁棒性变体证明目标约束会在预定层产生响应？
 4. 本步是否意外修改了其他方案或旧演示入口？
 
 ## 6. 最终验收清单
@@ -1686,11 +1771,12 @@
 - [ ] 每项有独立 evidence manifest、Merkle 根和一次成功 anchor。
 - [ ] 完整 run 恰好有 63 个可反向验证的审计锚定交易。
 - [ ] 三个 H00 全部接受。
-- [ ] A01-A03 在三个方案的共享协议层全部拒绝。
-- [ ] A04-A06 被 Original 接受、被 Baseline 与 Lineage 在 Baseline 语义层拒绝。
-- [ ] L01-L14 被 Original 与 Baseline 接受、被 Lineage 层拒绝。
-- [ ] 实际攻击接受数为 17、14、0，且由 decision.json 计算。
-- [ ] PESR、HAR、攻击族检测率、验证延迟、交易延迟和 Gas 均来自实际数据。
+- [ ] A01-A03 鲁棒性检查在三个方案的共享协议层全部拒绝。
+- [ ] A04-A06 鲁棒性检查被 Original 接受、被 Baseline 与 Lineage 在 Baseline 语义层拒绝。
+- [ ] L01-L05 谱系鲁棒性检查被 Original 与 Baseline 接受，并由 Lineage 层给出预期拒绝响应。
+- [ ] L06-L14 谱系鲁棒性检查被 Original 与 Baseline 接受，并由 Lineage 层给出预期拒绝响应。
+- [ ] A01-A06 与 L01-L14 的 20 个鲁棒性实例按方案和检查族单独汇总；PESR 标记为 N/A。
+- [ ] HAR、鲁棒性响应符合率、首个响应层分布、验证延迟、交易延迟和 Gas 均来自实际数据。
 - [ ] nonce、VC ID、JTI、budget ID、request hash、context、ReplayGuard、Lineage 子密钥与 epoch 的隔离检查通过。
 - [ ] /auth、/probe、/context_hash 和旧 demo 命令保持兼容。
 - [ ] 既有 Lineage、AgentDID 安全与合约测试全部继续通过。

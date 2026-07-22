@@ -12,13 +12,13 @@ from eth_account import Account
 from infrastructure.agentdid_protocol import did_from_address, sign_json
 from infrastructure.security import canonical_json, sha256_json
 
-from .cases import CASE_BY_ID
+from .cases import CASE_BY_ID, ROBUSTNESS_CHECKS
 
 
 SCENARIO_SCHEMA = "agentdid-lineage-control-scenario-v1"
 DELEGATION_SCHEMA = "agentdid-lineage-control-delegation-v1"
 REGISTRY_SCHEMA = "agentdid-lineage-control-registry-v1"
-SEMANTICS_SCHEMA = "agentdid-attack-semantics-v1"
+SEMANTICS_SCHEMA = "agentdid-scenario-semantics-v2"
 
 REQUEST_BODY: dict[str, Any] = {
     "operation": "integer-addition",
@@ -37,7 +37,7 @@ VERSION_ID = _version_id("agentdid-comparison-v1")
 OTHER_VERSION_ID = _version_id("agentdid-comparison-unauthorized")
 
 
-_LINEAGE_ATTACK_SEMANTICS: dict[str, dict[str, Any]] = {
+_LINEAGE_ROBUSTNESS_SEMANTICS: dict[str, dict[str, Any]] = {
     "L01": {
         "family": "lineage",
         "mutation": "leaf_action_escalation",
@@ -218,8 +218,22 @@ def _epoch_for(experiment_id: str) -> int:
 
 
 def _normalized_semantics(case_id: str) -> dict[str, Any]:
-    if case_id in _LINEAGE_ATTACK_SEMANTICS:
-        details = _LINEAGE_ATTACK_SEMANTICS[case_id]
+    if case_id in _LINEAGE_ROBUSTNESS_SEMANTICS:
+        details = {
+            **_LINEAGE_ROBUSTNESS_SEMANTICS[case_id],
+            "family": "agent-lineage-robustness",
+        }
+    elif case_id in ROBUSTNESS_CHECKS:
+        check = ROBUSTNESS_CHECKS[case_id]
+        details = {
+            "family": "agent-robustness",
+            "mutation": "robustness-check-input",
+            "target": check["target"],
+            "baseline_value": check["control"],
+            "mutated_value": check["variation"],
+            "constraint": check["dimension"],
+            "changed_paths": [],
+        }
     else:
         details = {
             "family": "control",
@@ -227,7 +241,7 @@ def _normalized_semantics(case_id: str) -> dict[str, Any]:
             "target": "none",
             "baseline_value": "legitimate",
             "mutated_value": "legitimate",
-            "constraint": "no_lineage_attack_injected",
+            "constraint": "no_lineage_policy_variation",
             "changed_paths": [],
         }
     value = {
@@ -387,7 +401,7 @@ def build_control_scenario(
 
     The function is deliberately chain-free.  ``baseline`` always contains a
     legitimate invocation, delegation chain and registry snapshot.  For L01 to
-    L14, the top-level artifacts contain the concrete attack mutation; H00 and
+    L14, the top-level artifacts contain the concrete robustness variation; H00 and
     all A cases remain byte-for-byte equivalent to the legitimate artifacts.
 
     The returned top-level ``signature`` authenticates the canonical JSON of
@@ -426,7 +440,9 @@ def build_control_scenario(
         audiences=[audience],
         versions=[VERSION_ID],
         not_before=now - 60,
-        expires_at=now + 7_200,
+        # L04 must remain a valid Session identity while extending past its
+        # parent, otherwise the type TTL check masks the attenuation rule.
+        expires_at=now + 3_000,
         remaining_depth=3,
         delegable=True,
     )
@@ -753,7 +769,7 @@ def build_control_scenario(
     elif case_id == "L14":
         invocation["version_id"] = OTHER_VERSION_ID
 
-    attack_semantics = _normalized_semantics(case_id)
+    scenario_semantics = _normalized_semantics(case_id)
     request_hash = sha256_json({
         "invocation": invocation,
         "body": REQUEST_BODY,
@@ -778,9 +794,9 @@ def build_control_scenario(
         "invocation": invocation,
         "delegation": delegation,
         "registry_state": registry_state,
-        "mutation": attack_semantics["mutation"],
-        "attack_semantics": attack_semantics,
-        "attack_semantics_hash": sha256_json(attack_semantics),
+        "mutation": scenario_semantics["mutation"],
+        "scenario_semantics": scenario_semantics,
+        "scenario_semantics_hash": sha256_json(scenario_semantics),
     }
     # This is the only returned signature for the request envelope.  It covers
     # the complete public scenario body and is created by the current leaf's

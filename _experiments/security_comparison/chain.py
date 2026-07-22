@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -31,6 +32,35 @@ HARDHAT_MNEMONIC = "test test test test test test test test test test test junk"
 DEFAULT_SEPOLIA_DID_REGISTRY = "0x03d5003bf0e79C5F5223588F347ebA39AfbC3818"
 DEFAULT_SEPOLIA_LINEAGE_REGISTRY = "0xD08c036042dC2B71dCD59be3E8A58689fb346198"
 
+# Minimal ERC-1056 ABI used by the comparison runner. Keeping this local avoids
+# depending on a test artifact inside node_modules for transaction creation.
+DID_REGISTRY_ABI = [
+    {
+        "inputs": [
+            {"internalType": "address", "name": "identity", "type": "address"},
+            {"internalType": "bytes32", "name": "name", "type": "bytes32"},
+            {"internalType": "bytes", "name": "value", "type": "bytes"},
+            {"internalType": "uint256", "name": "validity", "type": "uint256"},
+        ],
+        "name": "setAttribute",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "address", "name": "identity", "type": "address"},
+            {"indexed": False, "internalType": "bytes32", "name": "name", "type": "bytes32"},
+            {"indexed": False, "internalType": "bytes", "name": "value", "type": "bytes"},
+            {"indexed": False, "internalType": "uint256", "name": "validTo", "type": "uint256"},
+            {"indexed": False, "internalType": "uint256", "name": "previousChange", "type": "uint256"},
+        ],
+        "name": "DIDAttributeChanged",
+        "type": "event",
+    },
+]
+
 
 @dataclass(frozen=True)
 class ChainConfig:
@@ -40,6 +70,7 @@ class ChainConfig:
     did_registry_address: str
     lineage_registry_address: str
     confirmations: int = 1
+    rpc_timeout_seconds: float = 15.0
 
     def public_dict(self) -> dict[str, Any]:
         parsed = urlsplit(self.rpc_url)
@@ -53,6 +84,7 @@ class ChainConfig:
             "did_registry_address": self.did_registry_address,
             "lineage_registry_address": self.lineage_registry_address,
             "confirmations": self.confirmations,
+            "rpc_timeout_seconds": self.rpc_timeout_seconds,
         }
 
 
@@ -92,14 +124,14 @@ def load_actor_keys(backend: str) -> ActorKeys:
                 "issuer": keys[1],
                 "holder": keys[2],
                 "verifier": keys[4],
-                "attacker": keys[6],
+                "alternate": keys[6],
                 "evaluator": keys[8],
             },
             operations={
                 "issuer": keys[1],
                 "holder": keys[3],
                 "verifier": keys[5],
-                "attacker": keys[7],
+                "alternate": keys[7],
                 "evaluator": keys[9],
             },
         )
@@ -133,14 +165,14 @@ def load_actor_keys(backend: str) -> ActorKeys:
             "issuer": key("issuer"),
             "holder": key("agent_a_admin"),
             "verifier": key("agent_b_admin"),
-            "attacker": key("agent_c_admin"),
+            "alternate": key("agent_c_admin"),
             "evaluator": key("agent_d_admin"),
         },
         operations={
             "issuer": key("issuer"),
             "holder": key("agent_a_op"),
             "verifier": key("agent_b_op"),
-            "attacker": key("agent_c_op"),
+            "alternate": key("agent_c_op"),
             "evaluator": key("agent_d_op"),
         },
     )
@@ -149,13 +181,12 @@ def load_actor_keys(backend: str) -> ActorKeys:
 def sepolia_config() -> ChainConfig:
     config = load_key_config()
     rpc_url = os.environ.get("AGENTDID_EXPERIMENT_RPC_URL", "").strip() or str(config["api_url"])
-    chain_id = int(Web3(Web3.HTTPProvider(rpc_url)).eth.chain_id)
-    if chain_id != 11155111:
-        raise ValueError(f"Sepolia mode requires chain ID 11155111, got {chain_id}")
+    if not rpc_url:
+        raise ValueError("AGENTDID_EXPERIMENT_RPC_URL is required for Sepolia mode")
     return ChainConfig(
         backend="sepolia",
         rpc_url=rpc_url,
-        chain_id=chain_id,
+        chain_id=11155111,
         did_registry_address=Web3.to_checksum_address(
             os.environ.get("AGENTDID_DID_REGISTRY_ADDRESS", DEFAULT_SEPOLIA_DID_REGISTRY)
         ),
@@ -163,6 +194,10 @@ def sepolia_config() -> ChainConfig:
             os.environ.get("AGENTDID_LINEAGE_REGISTRY_ADDRESS", DEFAULT_SEPOLIA_LINEAGE_REGISTRY)
         ),
         confirmations=max(1, int(os.environ.get("AGENTDID_EXPERIMENT_CONFIRMATIONS", "1"))),
+        rpc_timeout_seconds=max(
+            1.0,
+            float(os.environ.get("AGENTDID_EXPERIMENT_RPC_TIMEOUT_SECONDS", "15")),
+        ),
     )
 
 
@@ -278,7 +313,35 @@ def _tx_params(w3: Web3, address: str, nonce: int) -> dict[str, Any]:
     return params
 
 
-def _send_function(w3: Web3, function: Any, private_key: str) -> dict[str, Any]:
+def _wait_for_confirmations(
+    w3: Web3,
+    receipt: Any,
+    confirmations: int,
+    *,
+    timeout: float = 600,
+) -> int:
+    required = max(1, int(confirmations))
+    target_block = int(receipt.blockNumber) + required - 1
+    deadline = time.monotonic() + timeout
+    while int(w3.eth.block_number) < target_block:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"DID_SETUP_CONFIRMATION_TIMEOUT: transaction did not reach {required} confirmations"
+            )
+        time.sleep(3)
+    confirmed = w3.eth.get_transaction_receipt(receipt.transactionHash)
+    if int(confirmed.status) != 1 or confirmed.blockHash != receipt.blockHash:
+        raise RuntimeError("DID_SETUP_RECEIPT_REORG: confirmed receipt changed")
+    return int(w3.eth.block_number)
+
+
+def _send_function(
+    w3: Web3,
+    function: Any,
+    private_key: str,
+    *,
+    confirmations: int = 1,
+) -> tuple[dict[str, Any], Any]:
     account = Account.from_key(private_key)
     params = _tx_params(w3, account.address, w3.eth.get_transaction_count(account.address, "pending"))
     transaction = function.build_transaction(params)
@@ -289,7 +352,13 @@ def _send_function(w3: Web3, function: Any, private_key: str) -> dict[str, Any]:
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=600)
     if receipt.status != 1:
         raise RuntimeError(f"transaction reverted: {tx_hash.hex()}")
-    return receipt_dict(receipt)
+    confirmation_block = _wait_for_confirmations(w3, receipt, confirmations)
+    result = receipt_dict(receipt)
+    result.update({
+        "confirmations_required": max(1, int(confirmations)),
+        "confirmation_block_number": confirmation_block,
+    })
+    return result, receipt
 
 
 def receipt_dict(receipt: Any) -> dict[str, Any]:
@@ -309,15 +378,17 @@ def configure_did_registry(
     identities: dict[str, ProtocolIdentity],
     actor_keys: ActorKeys,
 ) -> dict[str, Any]:
-    artifact_path = (
-        PROJECT_ROOT / "node_modules" / "ethr-did-resolver" / "src" / "__tests__"
-        / "EthereumDIDRegistry-Legacy" / "LegacyEthereumDIDRegistry.json"
-    )
-    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
-    w3 = Web3(Web3.HTTPProvider(config.rpc_url))
+    w3 = Web3(Web3.HTTPProvider(
+        config.rpc_url,
+        request_kwargs={"timeout": config.rpc_timeout_seconds},
+    ))
     if not w3.is_connected():
         raise ConnectionError("DID registry RPC is unavailable")
-    contract = w3.eth.contract(address=config.did_registry_address, abi=artifact["abi"])
+    if int(w3.eth.chain_id) != config.chain_id:
+        raise RuntimeError("DID_REGISTRY_CHAIN_ID_MISMATCH")
+    if not bytes(w3.eth.get_code(config.did_registry_address)):
+        raise RuntimeError("DID_REGISTRY_NO_CODE")
+    contract = w3.eth.contract(address=config.did_registry_address, abi=DID_REGISTRY_ABI)
     key_name = b"did/pub/Secp256k1/sigAuth/hex"[:32].ljust(32, b"\0")
     transactions = []
     for role, identity in identities.items():
@@ -329,23 +400,75 @@ def configure_did_registry(
                 "reason": "operation key is the DID controller",
             })
             continue
+        existing = resolve_did_document(config, identity.did)
+        existing_authentication = relationship_addresses(
+            existing["document"], "authentication"
+        )
+        if identity.operation_address.lower() in existing_authentication:
+            transactions.append({
+                "role": role,
+                "relationship": "authentication",
+                "operation_address": identity.operation_address,
+                "transaction": None,
+                "reason": "operation key is already active in the DID Registry",
+                "resolution_source": existing["source"],
+            })
+            continue
         function = contract.functions.setAttribute(
             identity.controller_address,
             key_name,
             bytes.fromhex(identity.operation_address[2:]),
             365 * 24 * 60 * 60,
         )
-        receipt = _send_function(w3, function, actor_keys.controllers[role])
+        receipt, raw_receipt = _send_function(
+            w3,
+            function,
+            actor_keys.controllers[role],
+            confirmations=config.confirmations,
+        )
+        decoded = contract.events.DIDAttributeChanged().process_receipt(
+            raw_receipt,
+            errors=DISCARD,
+        )
+        events = []
+        for event in decoded:
+            args = dict(event["args"])
+            events.append({
+                "event": "DIDAttributeChanged",
+                "identity": args["identity"],
+                "name": Web3.to_hex(args["name"]),
+                "value": Web3.to_hex(args["value"]),
+                "valid_to": int(args["validTo"]),
+                "previous_change": int(args["previousChange"]),
+                "block_number": int(event["blockNumber"]),
+                "log_index": int(event["logIndex"]),
+            })
+        expected_events = [
+            event for event in events
+            if event["identity"].lower() == identity.controller_address.lower()
+            and event["name"].lower() == Web3.to_hex(key_name).lower()
+            and event["value"].lower() == identity.operation_address.lower()
+        ]
+        if not expected_events:
+            raise RuntimeError("DID_REGISTRY_EVENT_MISSING")
+        resolved = resolve_did_document(config, identity.did)
+        authentication = relationship_addresses(resolved["document"], "authentication")
+        if identity.operation_address.lower() not in authentication:
+            raise RuntimeError("DID_RELATIONSHIP_MISMATCH")
         transactions.append({
             "role": role,
             "relationship": "authentication",
             "operation_address": identity.operation_address,
             "transaction": receipt,
+            "events": events,
+            "resolution_source": resolved["source"],
         })
     return {
         "schema_version": "agentdid-did-registry-setup-v1",
+        "backend": config.backend,
         "registry_address": config.did_registry_address,
         "chain_id": config.chain_id,
+        "confirmations": config.confirmations,
         "identities": {role: identity.public_dict() for role, identity in identities.items()},
         "transactions": transactions,
     }
@@ -381,8 +504,13 @@ def resolve_did_document(config: ChainConfig, did: str) -> dict[str, Any]:
         timeout=60,
     )
     if completed.returncode != 0:
-        redacted = completed.stderr.replace(config.rpc_url, "<redacted-rpc>").strip()
-        raise RuntimeError(f"did:ethr resolution failed: {redacted[-500:]}")
+        diagnostic = "\n".join(
+            part for part in (completed.stderr, completed.stdout) if part
+        ).replace(config.rpc_url, "<redacted-rpc>").strip()
+        raise RuntimeError(
+            "did:ethr resolution failed "
+            f"(exit={completed.returncode}): {diagnostic[-1000:]}"
+        )
     try:
         result = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
@@ -396,6 +524,21 @@ def resolve_did_document(config: ChainConfig, did: str) -> dict[str, Any]:
     document = result.get("didDocument")
     if not isinstance(document, dict) or document.get("id") != did:
         raise RuntimeError("did:ethr resolver returned a missing or mismatched document")
+    w3 = Web3(Web3.HTTPProvider(
+        config.rpc_url,
+        request_kwargs={"timeout": config.rpc_timeout_seconds},
+    ))
+    if not w3.is_connected():
+        raise ConnectionError("DID registry RPC is unavailable after resolution")
+    actual_chain_id = int(w3.eth.chain_id)
+    if actual_chain_id != config.chain_id:
+        raise RuntimeError(
+            f"DID registry chain mismatch: expected {config.chain_id}, got {actual_chain_id}"
+        )
+    registry_code = bytes(w3.eth.get_code(config.did_registry_address))
+    if not registry_code:
+        raise RuntimeError("DID_REGISTRY_NO_CODE")
+    resolved_at_block = int(w3.eth.block_number)
     return {
         "document": document,
         "resolution_metadata": metadata,
@@ -404,6 +547,8 @@ def resolve_did_document(config: ChainConfig, did: str) -> dict[str, Any]:
             "backend": config.backend,
             "chain_id": config.chain_id,
             "registry_address": config.did_registry_address,
+            "resolved_at_block": resolved_at_block,
+            "registry_code_sha256": hashlib.sha256(registry_code).hexdigest(),
         },
     }
 

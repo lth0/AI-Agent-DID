@@ -54,7 +54,7 @@ class LineageFixture:
         self.parent_permission = PermissionEnvelope(
             actions=("read", "write"), resources=("urn:tool:a", "urn:tool:b"),
             tasks=("task-1",), audiences=("urn:gateway:test",), versions=(VERSION,),
-            not_before=self.now - 5, expires_at=self.now + 7200,
+            not_before=self.now - 5, expires_at=self.now + 3000,
             remaining_depth=3, delegable=True,
         )
         self.first = create_delegation_credential(

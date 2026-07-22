@@ -101,6 +101,7 @@ class FakeLineage:
                 "accepted": True,
                 "code": "ACCEPTED",
                 "reason": "fake lineage policy accepted the legitimate request",
+                "execution_output": {"sum": 42},
             }
         elif self.case_id.startswith("L"):
             decision = {
@@ -109,7 +110,7 @@ class FakeLineage:
                 "reason": f"fake lineage policy rejected {self.case_id}",
             }
         else:
-            # AgentDID attacks must be decided below Lineage.  Accepting here
+            # AgentDID robustness cases must be decided below Lineage.  Accepting here
             # makes any accidental fall-through visible to the tests.
             decision = {
                 "accepted": True,
@@ -167,6 +168,43 @@ class ThreeSchemeAdapterTests(unittest.TestCase):
         self.assertIsInstance(get_adapter("baseline"), BaselineAgentDidAdapter)
         self.assertIsInstance(get_adapter("lineage"), LineageAgentDidAdapter)
         self.assertTrue(all(isinstance(adapter, SchemeAdapter) for adapter in ADAPTERS.values()))
+
+    def test_h00_is_accepted_by_all_three_schemes_with_independent_state(self) -> None:
+        expected = {
+            "original": ("ORIGINAL_IDENTITY_ACCEPTED", "original-agentdid"),
+            "baseline": ("BASELINE_ACCEPTED", "baseline-agentdid"),
+            "lineage": ("ACCEPTED", "lineage-agentdid"),
+        }
+        replay_guards = set()
+        challenges = set()
+        vp_hashes = set()
+
+        for scheme in SCHEMES:
+            with self.subTest(scheme=scheme):
+                bundle, fake_lineage = self.fresh_bundle(scheme, "H00")
+                decision = get_adapter(scheme).evaluate(bundle)
+
+                self.assertTrue(decision.accepted, decision.to_dict())
+                self.assertEqual(expected[scheme][0], decision.code)
+                self.assertEqual(expected[scheme][1], decision.detection_layer)
+                self.assertTrue(decision.protocol["accepted"])
+                if scheme in {"baseline", "lineage"}:
+                    self.assertIsNotNone(decision.baseline)
+                    self.assertTrue(decision.baseline["accepted"])
+                if scheme == "lineage":
+                    self.assertIsNotNone(decision.lineage)
+                    self.assertTrue(decision.lineage["accepted"])
+                    self.assertEqual({"sum": 42}, decision.lineage["execution_output"])
+                    self.assertIsNotNone(fake_lineage)
+                    self.assertEqual(1, fake_lineage.evaluate_calls)
+
+                replay_guards.add(bundle.independent_state["replay_guard_id"])
+                challenges.add(bundle.independent_state["vp_challenge"])
+                vp_hashes.add(bundle.independent_state["vp_hash"])
+
+        self.assertEqual(3, len(replay_guards))
+        self.assertEqual(3, len(challenges))
+        self.assertEqual(3, len(vp_hashes))
 
     def test_all_21_cases_across_three_schemes_match_the_63_item_vector(self) -> None:
         self.assertEqual(21, len(CASES))
@@ -255,6 +293,29 @@ class ThreeSchemeAdapterTests(unittest.TestCase):
         self.assertEqual("BASELINE_ACCEPTED", lineage.baseline["code"])
         self.assertIsNotNone(fake_lineage)
         self.assertEqual(1, fake_lineage.evaluate_calls)
+
+    def test_l01_to_l05_reach_only_the_intended_lineage_constraint(self) -> None:
+        for case_id in ("L01", "L02", "L03", "L04", "L05"):
+            with self.subTest(case_id=case_id):
+                original, _ = self.evaluate_fresh("original", case_id)
+                baseline, _ = self.evaluate_fresh("baseline", case_id)
+                lineage, fake_lineage = self.evaluate_fresh("lineage", case_id)
+
+                self.assertTrue(original.accepted)
+                self.assertTrue(original.protocol["accepted"])
+                self.assertTrue(baseline.accepted)
+                self.assertTrue(baseline.protocol["accepted"])
+                self.assertTrue(baseline.baseline["accepted"])
+
+                self.assertFalse(lineage.accepted)
+                self.assertEqual(LINEAGE_CODES[case_id], lineage.code)
+                self.assertEqual("lineage-agentdid", lineage.detection_layer)
+                self.assertTrue(lineage.protocol["accepted"])
+                self.assertTrue(lineage.baseline["accepted"])
+                self.assertIsNotNone(lineage.lineage)
+                self.assertFalse(lineage.lineage["accepted"])
+                self.assertIsNotNone(fake_lineage)
+                self.assertEqual(1, fake_lineage.evaluate_calls)
 
     def test_lineage_is_not_called_when_baseline_fails(self) -> None:
         bundle, fake_lineage = self.fresh_bundle("lineage", "A04")

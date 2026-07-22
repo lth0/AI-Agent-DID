@@ -24,7 +24,11 @@ from infrastructure.lineage import (
     credential_hash,
     version_did,
 )
-from infrastructure.lineage.crypto import did_from_address
+from infrastructure.lineage.crypto import (
+    address_from_did,
+    did_from_address,
+    recover_typed_signer,
+)
 from infrastructure.lineage.models import DelegationCredential, LineageInvocation
 from infrastructure.lineage.service import LineageGateway, ToolRouter
 from infrastructure.security import sha256_json
@@ -43,6 +47,7 @@ BODY = {"operation": "integer-addition", "left": 17, "right": 25}
 class LineageCase:
     epoch: Any
     base_chain: list[DelegationCredential]
+    registered_chains: list[list[DelegationCredential]]
     presented_chain: list[DelegationCredential]
     invocation: LineageInvocation
     body: dict[str, Any]
@@ -54,14 +59,31 @@ class LineageCase:
     mutation: str
 
     def public_dict(self) -> dict[str, Any]:
+        recovered_signer = recover_typed_signer(
+            self.invocation.unsigned_dict(),
+            self.invocation.signature,
+            purpose="AgentLineage/REQUEST/v1",
+            chain_id=self.registry.w3.eth.chain_id,
+            verifying_contract=self.registry.address,
+        )
+        expected_signer = address_from_did(self.protocol_holder_did)
         return {
             "epoch_certificate": self.epoch.to_dict(),
             "registered_chain": [item.to_dict() for item in self.base_chain],
+            "registered_chains": [
+                [item.to_dict() for item in chain]
+                for chain in self.registered_chains
+            ],
             "presented_chain": [item.to_dict() for item in self.presented_chain],
             "invocation": self.invocation.to_dict(),
             "body": self.body,
             "expected_audience": self.expected_audience,
             "mutation": self.mutation,
+            "request_signature_control": {
+                "passed": recovered_signer.lower() == expected_signer.lower(),
+                "recovered_signer": recovered_signer,
+                "expected_signer": expected_signer,
+            },
         }
 
     def evaluate(self) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -71,38 +93,37 @@ class LineageCase:
             state_provider=self.registry,
             max_state_block_lag=0,
         )
-        if self.mutation == "legitimate":
-            router = ToolRouter()
+        router = ToolRouter()
+        for action, resource in (
+            ("read", "urn:tool:a"),
+            ("write", "urn:tool:a"),
+            ("read", "urn:tool:b"),
+            ("delete", "urn:tool:a"),
+        ):
             router.register(
-                "read",
-                "urn:tool:a",
+                action,
+                resource,
                 cost_units=2,
                 handler=lambda body: {"sum": int(body["left"]) + int(body["right"])},
             )
-            gateway = LineageGateway(
-                verifier,
-                self.registry,
-                router,
-                audience=AUDIENCE,
-            )
-            result = gateway.invoke({
-                "epoch_certificate": self.epoch.to_dict(),
-                "delegation_chain": [item.to_dict() for item in self.presented_chain],
-                "invocation": self.invocation.to_dict(),
-                "body": self.body,
-            })
-            for key in ("budget_begin", "budget_finish"):
-                if result.get(key):
-                    self.transactions.append(result[key])
-            return result["decision"], self.transactions
-        decision = verifier.verify(
-            self.epoch,
-            self.presented_chain,
-            self.invocation,
-            expected_audience=AUDIENCE,
-            expected_body_hash=sha256_json(self.body),
+        gateway = LineageGateway(
+            verifier,
+            self.registry,
+            router,
+            audience=self.expected_audience,
         )
-        return decision.to_dict(), self.transactions
+        result = gateway.invoke({
+            "epoch_certificate": self.epoch.to_dict(),
+            "delegation_chain": [item.to_dict() for item in self.presented_chain],
+            "invocation": self.invocation.to_dict(),
+            "body": self.body,
+        })
+        for key in ("budget_begin", "budget_finish"):
+            if result.get(key):
+                self.transactions.append(result[key])
+        decision = dict(result["decision"])
+        decision["execution_output"] = result.get("output")
+        return decision, self.transactions
 
 
 def _wallet(agent_type: AgentType, *, delegable: bool, network: str) -> LineageWallet:
@@ -235,7 +256,11 @@ def build_lineage_case(
         audiences=(AUDIENCE,),
         versions=(VERSION,),
         not_before=now - 10,
-        expires_at=now + 7200,
+        # Keep the parent window below the Session identity TTL ceiling.  L04
+        # can then extend the child beyond its parent while remaining a valid
+        # Session identity, so the intended attenuation check is the first
+        # failing Lineage rule.
+        expires_at=now + 3000,
         remaining_depth=3,
         delegable=True,
     )
@@ -344,6 +369,7 @@ def build_lineage_case(
         verifying_contract=contract,
     )
     presented_chain = [first, second]
+    registered_chains = [[first, second]]
     holder_private_key = session.operation_private_key
     holder_did = session.did
     expected_audience = AUDIENCE
@@ -431,6 +457,12 @@ def build_lineage_case(
     elif case_id == "L09":
         other_persistent = _wallet(AgentType.PERSISTENT, delegable=True, network=network)
         other_session = _wallet(AgentType.SESSION, delegable=False, network=network)
+        other_first_budget = "0x" + hashlib.sha256(
+            f"{experiment_id}:other-persistent-budget".encode("utf-8")
+        ).hexdigest()
+        other_second_budget = "0x" + hashlib.sha256(
+            f"{experiment_id}:other-session-budget".encode("utf-8")
+        ).hexdigest()
         other_first = create_delegation_credential(
             root_did=root_did,
             parent_did=root_did,
@@ -443,7 +475,7 @@ def build_lineage_case(
             version_id=VERSION,
             replica_group_id=None,
             permission=parent_permission,
-            budget_id=first_budget,
+            budget_id=other_first_budget,
             reservation=BudgetLimits(100, 1000, 5),
             epoch=epoch_number,
             status_ref={"chain_id": chain_id, "contract": contract},
@@ -463,7 +495,7 @@ def build_lineage_case(
             version_id=VERSION,
             replica_group_id=None,
             permission=child_permission,
-            budget_id=second_budget,
+            budget_id=other_second_budget,
             reservation=BudgetLimits(10, 100, 1),
             epoch=epoch_number,
             status_ref={"chain_id": chain_id, "contract": contract},
@@ -471,11 +503,41 @@ def build_lineage_case(
             chain_id=chain_id,
             verifying_contract=contract,
         )
+        transactions.append(_tx(
+            "register_other_persistent",
+            registry.register_delegation(other_first, epoch_private_key),
+        ))
+        transactions.append(_tx(
+            "reserve_other_persistent_budget",
+            registry.reserve_child_budget(
+                root_budget_id,
+                other_first,
+                epoch_private_key,
+            ),
+        ))
+        transactions.append(_tx(
+            "register_other_session",
+            registry.register_delegation(
+                other_second,
+                other_persistent.delegation_private_key,
+                parent=other_first,
+            ),
+        ))
+        transactions.append(_tx(
+            "reserve_other_session_budget",
+            registry.reserve_child_budget(
+                other_first_budget,
+                other_second,
+                other_persistent.delegation_private_key,
+            ),
+        ))
+        registered_chains.append([other_first, other_second])
         other_request = dataclasses.replace(
             invocation,
             leaf_did=other_session.did,
             credential_jti=other_second.jti,
             origin_did=other_session.did,
+            budget_id=other_second_budget,
             signature="",
         )
         invocation = other_session.sign_invocation(
@@ -492,7 +554,6 @@ def build_lineage_case(
         mutation = "cross_task_replay"
     elif case_id == "L11":
         invocation = _resign(invocation, session, chain_id, contract, audience=OTHER_AUDIENCE)
-        expected_audience = OTHER_AUDIENCE
         mutation = "cross_audience_replay"
     elif case_id == "L12":
         transactions.append(_tx(
@@ -510,6 +571,7 @@ def build_lineage_case(
     return LineageCase(
         epoch=epoch,
         base_chain=[first, second],
+        registered_chains=registered_chains,
         presented_chain=presented_chain,
         invocation=invocation,
         body=BODY,

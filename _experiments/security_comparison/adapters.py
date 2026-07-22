@@ -29,7 +29,7 @@ from infrastructure.semantic_benchmark import (
     evaluate as evaluate_benchmark,
 )
 
-from .cases import CaseSpec
+from .cases import CaseSpec, ROBUSTNESS_CHECKS
 from .chain import ActorKeys, ChainConfig
 from .lineage_cases import AUDIENCE, LineageCase, build_lineage_case
 from .scenarios import build_control_scenario
@@ -184,7 +184,7 @@ def build_experiment_bundle(
     }
     issuer = identities["issuer"]
     holder = identities["holder"]
-    attacker = identities["attacker"]
+    alternate = identities["alternate"]
     evaluator = identities["evaluator"]
     status_list_id = f"urn:agentdid:status:{experiment_id}"
     status_list = issue_status_list(issuer, list_id=status_list_id)
@@ -218,16 +218,16 @@ def build_experiment_bundle(
     if case.case_id == "A01":
         presentation_holder = dataclasses.replace(
             holder,
-            operation_address=attacker.operation_address,
-            operation_private_key=attacker.operation_private_key,
+            operation_address=alternate.operation_address,
+            operation_private_key=alternate.operation_private_key,
         )
     elif case.case_id == "A02":
         challenge = f"captured-{experiment_id}"
         expected_challenge = f"fresh-{experiment_id}"
     elif case.case_id == "A03":
-        presentation_holder = attacker
-        presentation_verification_address = attacker.operation_address
-        expected_holder = attacker.did
+        presentation_holder = alternate
+        presentation_verification_address = alternate.operation_address
+        expected_holder = alternate.did
     presentation = create_presentation(
         credentials,
         presentation_holder,
@@ -318,7 +318,7 @@ def build_experiment_bundle(
             "epoch": control_request["epoch"],
             "budget_id": control_request["budget_id"],
             "request_hash": control_request["request_hash"],
-            "attack_semantics_hash": control_request["attack_semantics_hash"],
+            "scenario_semantics_hash": control_request["scenario_semantics_hash"],
             "mutation": control_request["mutation"],
             "control_request": control_request,
         }
@@ -331,7 +331,7 @@ def build_experiment_bundle(
             "epoch": int(lineage.epoch.epoch),
             "budget_id": lineage.invocation.budget_id,
             "request_hash": sha256_json(lineage.invocation.unsigned_dict()),
-            "attack_semantics_hash": control_request["attack_semantics_hash"],
+            "scenario_semantics_hash": control_request["scenario_semantics_hash"],
             "mutation": control_request["mutation"],
         }
     independent_state = {
@@ -379,8 +379,8 @@ def bind_resolved_documents(
 
     ``ethr-did-resolver`` assigns event-derived fragments such as
     ``#delegate-1``.  The proof must name that resolved method rather than an
-    in-memory placeholder.  A01 deliberately retains the victim method id but
-    signs with the attacker's key, so the protocol still rejects it at the
+    in-memory placeholder.  A01 deliberately retains the claimed holder method
+    id but signs with an unrelated key, so the protocol still rejects it at the
     authentication relationship.
     """
 
@@ -402,6 +402,77 @@ def bind_resolved_documents(
         verification_method=verification_method,
     )
     bundle.independent_state["vp_hash"] = sha256_json(bundle.presentation)
+
+
+def build_robustness_evidence(bundle: ExperimentBundle) -> dict[str, Any] | None:
+    definition = ROBUSTNESS_CHECKS.get(bundle.case.case_id)
+    if definition is None:
+        return None
+    evidence: dict[str, Any] = {
+        "schema_version": "agentdid-robustness-evidence-v1",
+        "classification": "agent-robustness-check",
+        "case_id": bundle.case.case_id,
+        "dimension": definition["dimension"],
+        "target": definition["target"],
+        "control": definition["control"],
+        "variation": definition["variation"],
+    }
+    if bundle.case.case_id == "A01":
+        evidence["observations"] = {
+            "claimed_holder": bundle.presentation["holder"],
+            "registered_authentication_address": bundle.presentation_verification_address,
+            "signing_operation_address": bundle.presentation_signer.operation_address,
+            "challenge": bundle.presentation["proof"]["challenge"],
+            "audience": bundle.presentation["proof"]["audience"],
+        }
+    elif bundle.case.case_id == "A02":
+        captured_challenge = str(bundle.presentation["proof"]["challenge"])
+        control = DidVcVpVerifier(
+            bundle.documents,
+            trusted_issuers={bundle.identities["issuer"].did},
+            status_lists=bundle.status_lists,
+            replay_guard=ReplayGuard(ttl_seconds=3600),
+        ).verify(
+            bundle.presentation,
+            expected_holder=bundle.expected_holder,
+            expected_challenge=captured_challenge,
+            expected_audience=bundle.expected_audience,
+        )
+        evidence["observations"] = {
+            "captured_challenge": captured_challenge,
+            "fresh_expected_challenge": bundle.expected_challenge,
+            "captured_vp_hash": sha256_json(bundle.presentation),
+            "captured_vp_control_verification": control.to_dict(),
+            "same_presentation_reused": True,
+        }
+    elif bundle.case.case_id == "A03":
+        evidence["observations"] = {
+            "vp_holder": bundle.presentation["holder"],
+            "credential_subjects": [
+                item["credentialSubject"]["id"] for item in bundle.credentials
+            ],
+            "vp_signing_operation_address": bundle.presentation_signer.operation_address,
+        }
+    elif bundle.case.case_id == "A04":
+        capability = _credential_by_type(bundle, "AgentCapabilityCredential")
+        evidence["observations"] = {
+            "signed_capability_claim": capability["credentialSubject"] if capability else None,
+            "independent_evaluation": bundle.evaluator_report,
+            "ground_truth_source": "deterministic-benchmark:integer-addition-v1:100-cases",
+        }
+    elif bundle.case.case_id == "A05":
+        evidence["observations"] = {
+            "signed_reported_state": bundle.state_statement,
+            "verifier_observed_state": bundle.actual_state,
+            "ground_truth_source": "deterministic-artifact-digest",
+        }
+    elif bundle.case.case_id == "A06":
+        evidence["observations"] = {
+            "signed_reported_context": bundle.context_statement,
+            "verifier_stored_context": bundle.expected_context,
+            "ground_truth_source": "verifier-session-context",
+        }
+    return evidence
 
 
 def _credential_by_type(bundle: ExperimentBundle, credential_type: str) -> dict[str, Any] | None:

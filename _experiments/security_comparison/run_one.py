@@ -12,10 +12,13 @@ from typing import Any
 from _experiments.security_comparison.adapters import (
     bind_resolved_documents,
     build_experiment_bundle,
+    build_robustness_evidence,
     evaluate_scheme,
 )
 from _experiments.security_comparison.cases import (
     CASE_BY_ID,
+    LINEAGE_ROBUSTNESS_CHECKS,
+    ROBUSTNESS_CHECKS,
     SCHEME_DIRECTORIES,
     SCHEME_LABELS,
     SCHEMES,
@@ -33,6 +36,7 @@ from _experiments.security_comparison.chain import (
     resolve_and_verify_dids,
     sepolia_config,
 )
+from _experiments.security_comparison.cli_common import redact_rpc_text, run_id_argument
 from _experiments.security_comparison.evidence import (
     ComparisonAuditRecorder,
     build_evidence_manifest,
@@ -40,17 +44,22 @@ from _experiments.security_comparison.evidence import (
     read_json,
     write_json,
 )
+from _experiments.security_comparison.preflight import run_sepolia_did_preflight
 from infrastructure.security import sha256_json
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run one isolated AgentDID comparison experiment")
     parser.add_argument("--scheme", required=True, choices=SCHEMES)
     parser.add_argument("--case", required=True, choices=sorted(CASE_BY_ID))
-    parser.add_argument("--run-id", default="single-" + uuid.uuid4().hex[:12])
+    parser.add_argument(
+        "--run-id",
+        type=run_id_argument,
+        default="single-" + uuid.uuid4().hex[:12],
+    )
     parser.add_argument("--experiment-id")
     parser.add_argument("--chain", choices=("hardhat", "sepolia"), default="hardhat")
     parser.add_argument("--chain-id", type=int)
@@ -62,24 +71,53 @@ def parse_args() -> argparse.Namespace:
         default=str(PROJECT_ROOT / ".codex" / "comparison_runs"),
     )
     parser.add_argument("--temp-root", default=str(PROJECT_ROOT / ".codex" / "comparison_tmp"))
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _config_from_args(args: argparse.Namespace) -> ChainConfig | None:
-    if not args.lineage_registry or not args.did_registry or not args.chain_id:
+    supplied = (args.lineage_registry, args.did_registry, args.chain_id)
+    if any(value is not None for value in supplied) and not all(
+        value is not None for value in supplied
+    ):
+        raise ValueError(
+            "--chain-id, --did-registry and --lineage-registry must be supplied together"
+        )
+    if not all(value is not None for value in supplied):
         return None
     import os
 
     rpc_url = os.environ.get("AGENTDID_EXPERIMENT_RPC_URL", "").strip()
     if not rpc_url:
         raise ValueError("AGENTDID_EXPERIMENT_RPC_URL is required")
+    if args.chain == "sepolia" and args.chain_id != 11155111:
+        raise ValueError("Sepolia mode requires chain ID 11155111")
+    from web3 import Web3
+
     return ChainConfig(
         backend=args.chain,
         rpc_url=rpc_url,
         chain_id=args.chain_id,
-        did_registry_address=args.did_registry,
-        lineage_registry_address=args.lineage_registry,
+        did_registry_address=Web3.to_checksum_address(args.did_registry),
+        lineage_registry_address=Web3.to_checksum_address(args.lineage_registry),
     )
+
+
+def _validate_shared_did_setup(
+    setup: dict[str, Any],
+    chain_config: ChainConfig,
+    identities: dict[str, Any],
+) -> None:
+    if setup.get("backend") != chain_config.backend:
+        raise RuntimeError("DID_SETUP_BACKEND_MISMATCH")
+    if int(setup.get("chain_id", -1)) != chain_config.chain_id:
+        raise RuntimeError("DID_SETUP_CHAIN_ID_MISMATCH")
+    if str(setup.get("registry_address", "")).lower() != (
+        chain_config.did_registry_address.lower()
+    ):
+        raise RuntimeError("DID_SETUP_REGISTRY_MISMATCH")
+    expected = {role: identity.public_dict() for role, identity in identities.items()}
+    if setup.get("identities") != expected:
+        raise RuntimeError("DID_SETUP_IDENTITIES_MISMATCH")
 
 
 def _transaction_hashes(transactions: list[dict[str, Any]]) -> list[str]:
@@ -146,6 +184,11 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
         )
         if setup_path.exists():
             did_setup = read_json(setup_path)
+            _validate_shared_did_setup(
+                did_setup,
+                chain_config,
+                actor_keys.identities(chain_config.chain_id),
+            )
         else:
             did_setup = configure_did_registry(
                 chain_config,
@@ -177,6 +220,17 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
             "case_id": case.case_id,
             "case_name": case.name,
             "case_family": case.family,
+            "case_classification": (
+                "agent-robustness-check"
+                if case.case_id in ROBUSTNESS_CHECKS
+                else (
+                    "agent-lineage-robustness-check"
+                    if case.case_id in LINEAGE_ROBUSTNESS_CHECKS
+                    else "security-scenario"
+                )
+            ),
+            "robustness_check": ROBUSTNESS_CHECKS.get(case.case_id),
+            "lineage_robustness_check": LINEAGE_ROBUSTNESS_CHECKS.get(case.case_id),
             "description": case.description,
             "expected_accepted": outcome.accepted,
             "expected_code": outcome.code,
@@ -209,10 +263,16 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
                     if bundle.lineage
                     else "scheme records but does not enforce the Lineage control request"
                 ),
+                "robustness_check": LINEAGE_ROBUSTNESS_CHECKS.get(case.case_id),
             },
         )
 
         decision = evaluate_scheme(bundle)
+        execution_output = (
+            decision.lineage.get("execution_output")
+            if decision.lineage is not None
+            else None
+        )
         expected = outcome.accepted
         layer_passed = {
             "did-vc-vp": bool(decision.protocol.get("accepted")),
@@ -229,6 +289,21 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
             and decision.detection_layer == outcome.detection_layer
             and all(layer_passed[layer] for layer in outcome.required_pass_layers)
         )
+        robustness_evidence = build_robustness_evidence(bundle)
+        if robustness_evidence is not None:
+            robustness_evidence.update({
+                "expected_accepted": outcome.accepted,
+                "expected_code": outcome.code,
+                "expected_detection_layer": outcome.detection_layer,
+                "observed_accepted": decision.accepted,
+                "observed_code": decision.code,
+                "observed_detection_layer": decision.detection_layer,
+                "response_conformant": passed,
+            })
+            write_json(
+                temp_directory / "robustness-evidence.json",
+                robustness_evidence,
+            )
         latency_ms = (time.perf_counter() - started) * 1000
         result = {
             "schema_version": "agentdid-comparison-decision-v1",
@@ -240,6 +315,31 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
             "case_id": args.case,
             "case_name": case.name,
             "family": case.family,
+            "case_classification": (
+                "agent-robustness-check"
+                if case.case_id in ROBUSTNESS_CHECKS
+                else (
+                    "agent-lineage-robustness-check"
+                    if case.case_id in LINEAGE_ROBUSTNESS_CHECKS
+                    else "security-scenario"
+                )
+            ),
+            "robustness_dimension": (
+                ROBUSTNESS_CHECKS[case.case_id]["dimension"]
+                if case.case_id in ROBUSTNESS_CHECKS
+                else None
+            ),
+            "robustness_check_passed": (
+                passed if case.case_id in ROBUSTNESS_CHECKS else None
+            ),
+            "lineage_robustness_dimension": (
+                LINEAGE_ROBUSTNESS_CHECKS[case.case_id]["dimension"]
+                if case.case_id in LINEAGE_ROBUSTNESS_CHECKS
+                else None
+            ),
+            "lineage_robustness_check_passed": (
+                passed if case.case_id in LINEAGE_ROBUSTNESS_CHECKS else None
+            ),
             "expected_accepted": expected,
             "expected_code": outcome.code,
             "expected_detection_layer": outcome.detection_layer,
@@ -249,6 +349,7 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
             "code": decision.code,
             "reason": decision.reason,
             "detection_layer": decision.detection_layer,
+            "execution_output": execution_output,
             "latency_ms": round(latency_ms, 6),
             "completed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         }
@@ -256,7 +357,21 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
             "protocol": decision.protocol,
             "baseline": decision.baseline,
             "lineage": decision.lineage,
+            "robustness": robustness_evidence,
         })
+        if bundle.lineage is not None:
+            write_json(
+                temp_directory / "lineage-evidence.json",
+                {
+                    "enabled": True,
+                    "isolation": bundle.independent_state["lineage"],
+                    "evidence": bundle.lineage.public_dict(),
+                    "decision": decision.lineage,
+                    "execution_output": execution_output,
+                    "reason": None,
+                    "robustness_check": LINEAGE_ROBUSTNESS_CHECKS.get(case.case_id),
+                },
+            )
         write_json(temp_directory / "decision.json", result)
 
         audit.record(
@@ -301,6 +416,24 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
             expected_accepted=expected,
             passed=passed,
         )
+        if robustness_evidence is not None:
+            audit.record(
+                "robustness_check",
+                accepted=decision.accepted,
+                code=decision.code,
+                detection_layer=decision.detection_layer,
+                robustness_dimension=robustness_evidence["dimension"],
+                response_conformant=passed,
+            )
+        if case.case_id in LINEAGE_ROBUSTNESS_CHECKS:
+            audit.record(
+                "lineage_robustness_check",
+                accepted=decision.accepted,
+                code=decision.code,
+                detection_layer=decision.detection_layer,
+                robustness_dimension=LINEAGE_ROBUSTNESS_CHECKS[case.case_id]["dimension"],
+                response_conformant=passed,
+            )
 
         transactions = list(decision.chain_transactions)
         tx_hashes = _transaction_hashes(transactions)
@@ -355,6 +488,8 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
         finalize_experiment(temp_directory, final_directory)
         return (0 if passed else 2), final_directory
     except Exception as exc:
+        safe_message = redact_rpc_text(str(exc), chain_config.rpc_url)
+        safe_traceback = redact_rpc_text(traceback.format_exc(), chain_config.rpc_url)
         error = {
             "schema_version": "agentdid-comparison-decision-v1",
             "status": "INFRA_ERROR",
@@ -370,7 +505,7 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
             "accepted": None,
             "passed": False,
             "code": "INFRA_ERROR",
-            "reason": str(exc),
+            "reason": safe_message,
             "detection_layer": "infrastructure",
             "completed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         }
@@ -381,28 +516,61 @@ def execute_experiment(args: argparse.Namespace, chain_config: ChainConfig) -> t
             code="INFRA_ERROR",
             detection_layer="infrastructure",
             error_type=type(exc).__name__,
-            error_hash=sha256_json({"type": type(exc).__name__, "message": str(exc)}),
+            error_hash=sha256_json({"type": type(exc).__name__, "message": safe_message}),
         )
         (temp_directory / "stdout.log").write_text("", encoding="utf-8")
-        (temp_directory / "stderr.log").write_text(traceback.format_exc(), encoding="utf-8")
+        (temp_directory / "stderr.log").write_text(safe_traceback, encoding="utf-8")
         build_evidence_manifest(temp_directory, run_id=args.run_id, experiment_id=experiment_id)
         finalize_experiment(temp_directory, final_directory)
         return 1, final_directory
 
 
 def _run_with_config(args: argparse.Namespace, config: ChainConfig) -> int:
+    if config.backend == "sepolia":
+        report = run_sepolia_did_preflight(config)
+        preflight_path = (
+            Path(args.output_root).resolve() / args.run_id / "preflight.json"
+        )
+        write_json(preflight_path, report)
+        if not report["passed"]:
+            print(json.dumps({
+                "status": "INFRA_ERROR",
+                "code": report["code"],
+                "preflight": str(preflight_path),
+                "exit_code": 1,
+            }, ensure_ascii=False))
+            return 1
     code, output = execute_experiment(args, config)
     print(json.dumps({"output": str(output), "exit_code": code}, ensure_ascii=False))
     return code
 
 
-def main() -> int:
-    args = parse_args()
+def _standalone_hardhat_run_exists(args: argparse.Namespace) -> list[str]:
+    paths = (
+        Path(args.output_root).resolve() / args.run_id,
+        Path(args.temp_root).resolve() / args.run_id,
+    )
+    return [str(path) for path in paths if path.exists()]
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
     supplied = _config_from_args(args)
     if supplied is not None:
         return _run_with_config(args, supplied)
     if args.chain == "sepolia":
         return _run_with_config(args, sepolia_config())
+    existing = _standalone_hardhat_run_exists(args)
+    if existing:
+        print(json.dumps({
+            "status": "INFRA_ERROR",
+            "code": "STANDALONE_RUN_ID_ALREADY_EXISTS",
+            "run_id": args.run_id,
+            "paths": existing,
+            "reason": "standalone Hardhat runs require a fresh run-id",
+            "exit_code": 1,
+        }, ensure_ascii=False))
+        return 1
     node_logs = Path(args.temp_root) / args.run_id / "standalone-chain"
     with HardhatNode(node_logs):
         deployment = deploy_local_contracts()
